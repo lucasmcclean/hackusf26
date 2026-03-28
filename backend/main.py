@@ -90,24 +90,27 @@ async def broadcast_periodic():
                            ST_X(location::geometry) AS longitude
                     FROM users;
                 """))
-                users_locations = [list(row) for row in users_result]
 
+                # Fetch locations from responders
                 responders_result = db.execute(text("""
                     SELECT ST_Y(location::geometry) AS latitude,
                            ST_X(location::geometry) AS longitude
                     FROM responders;
                 """))
-                responders_locations = [list(row) for row in responders_result]
 
-                return users_locations, responders_locations
+                all_locations = [list(row) for row in users_result] + [list(row) for row in responders_result]
+
+                regions = [[1, 2], [3]]
+
+                return all_locations, regions
             finally:
                 db.close()
 
-        users_locations, responders_locations = await loop.run_in_executor(None, get_locations_sync)
+        locations, regions = await loop.run_in_executor(None, get_locations_sync)
 
         await manager.broadcast(json.dumps({
-            "users": users_locations,
-            "responders": responders_locations
+            "locations": locations,
+            "regions": regions
         }))
 
 @app.on_event("startup")
