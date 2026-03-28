@@ -9,11 +9,10 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 from dotenv import load_dotenv
 import os
 
-from messages.user_message import query_user_messages
 from responders.responder import add_responder, update_responder
 from responders.responder_message import add_responder_message
 from users.user import add_user, update_user
-from users.user_message import add_user_message
+from users.user_message import add_user_message, query_user_messages
 
 load_dotenv()
 
