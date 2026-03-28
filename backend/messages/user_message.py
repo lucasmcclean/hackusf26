@@ -9,7 +9,8 @@ from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core import Document
 
-from messages.index import index, llm
+
+from messages.index import index
 
 DATABASE_URL = os.getenv("DATABASE_URL", "uh oh")
 
@@ -31,15 +32,28 @@ def add_user_message(
         if location_geom:
             conn.execute(
                 text(
-                    "INSERT INTO messages (user_id, content, time, location_geom) "
-                    "VALUES (:user_id, :content, :time, :location_geom)"
+                    """
+                    INSERT INTO user_messages (user_id, content, time, location_geom)
+                    VALUES (
+                        :user_id,
+                        :content,
+                        :time,
+                        ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography
+                    )
+                    """
                 ),
-                {"user_id": user_id, "content": content, "time": time, "location_geom": location_geom}
+                {
+                    "user_id": user_id,
+                    "content": content,
+                    "time": time,
+                    "lat": lat,
+                    "lon": lon,
+                }
             )
         else:
             conn.execute(
                 text(
-                    "INSERT INTO messages (user_id, content, time) "
+                    "INSERT INTO user_messages (user_id, content, time) "
                     "VALUES (:user_id, :content, :time)"
                 ),
                 {"user_id": user_id, "content": content, "time": time}
@@ -68,7 +82,7 @@ def query_user_messages(
         with engine.begin() as conn:
             result = conn.execute(
                 text(
-                    "SELECT id FROM messages "
+                    "SELECT id FROM user_messages "
                     "WHERE ST_DWithin(location_geom, ST_MakePoint(:lon, :lat)::geography, :radius)"
                 ),
                 {"lat": lat, "lon": lon, "radius": radius_meters}
@@ -87,9 +101,10 @@ def query_user_messages(
     retriever = VectorIndexRetriever(
         index=index,
         similarity_top_k=top_k,
-        vector_store_query_mode="hybrid",
         filters=filters if filters else None
     )
 
-    query_engine = RetrieverQueryEngine(retriever=retriever, llm=llm)
+    query_engine = RetrieverQueryEngine(
+        retriever=retriever,
+    )
     return query_engine.query(query_text)

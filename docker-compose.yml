@@ -11,14 +11,19 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:Z
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - app-network
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     container_name: backend
     restart: always
     depends_on:
@@ -26,12 +31,13 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/app_db
+      GEMINI_API_KEY: AIzaSyDb2mnMxgl9fQsAutGNkDj-k-1fhuEa7qE
     ports:
       - "8000:8000"
     volumes:
-      - ./backend:/backend
-    command: >
-      uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+      - ./backend:/backend:Z
+    networks:
+      - app-network
 
   frontend:
     build:
@@ -41,7 +47,13 @@ services:
     ports:
       - "5173:5173"
     volumes:
-      - ./frontend:/frontend
+      - ./frontend:/frontend:Z
+    networks:
+      - app-network
 
 volumes:
   postgres_data:
+
+networks:
+  app-network:
+    external: true
