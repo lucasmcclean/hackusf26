@@ -148,7 +148,7 @@ export default function ResponderView() {
     setMessages((previous) => [...previous, outgoingMessage])
 
     try {
-      await sendMessage(clientId, content)
+      await sendMessage(clientId, content, 'responder')
     } catch {
       setMessages((previous) => [...previous, {
         id: `system-${Date.now()}`,

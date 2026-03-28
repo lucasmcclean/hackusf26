@@ -144,8 +144,8 @@ export async function switchRole(clientId: string, role: Role): Promise<void> {
   await postToBackend('/switch', { client_id: clientId, role })
 }
 
-export async function sendMessage(clientId: string, content: string): Promise<void> {
-  await postToBackend('/message', { client_id: clientId, content })
+export async function sendMessage(clientId: string, content: string, role: Role): Promise<void> {
+  await postToBackend('/message', { client_id: clientId, content, role })
 }
 
 export async function queryMessages(clientId: string, content: string): Promise<string> {

@@ -151,7 +151,7 @@ export default function UserView() {
     setMessages((previous) => [...previous, outgoingMessage])
 
     try {
-      await sendMessage(clientId, content)
+      await sendMessage(clientId, content, 'user')
     } catch {
       setMessages((previous) => [...previous, {
         id: `system-${Date.now()}`,
