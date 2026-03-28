@@ -17,6 +17,10 @@ interface BroadcastMessage {
   regions: RegionGroup[]
 }
 
+interface ResponderMessage {
+  responder_message: string
+}
+
 export interface BackendData {
   locations: LocationTuple[]
   regions: RegionGroup[]
@@ -32,6 +36,7 @@ interface ConnectOptions {
   location?: LocationTuple | null
   onClientId: (clientId: string) => void
   onData: (data: BackendData) => void
+  onResponderMessage?: (content: string) => void
   onDisconnect?: (reason: string) => void
   onError?: (message: string) => void
 }
@@ -74,6 +79,11 @@ function isBroadcastMessage(value: unknown): value is BroadcastMessage {
 
   return candidate.locations.every((entry) => isLocationTuple(entry))
     && candidate.regions.every((entry) => isRegionGroup(entry))
+}
+
+function isResponderMessage(value: unknown): value is ResponderMessage {
+  if (typeof value !== 'object' || value === null) return false
+  return typeof (value as Partial<ResponderMessage>).responder_message === 'string'
 }
 
 function waitForOpen(socket: WebSocket, timeoutMs: number): Promise<void> {
@@ -197,6 +207,11 @@ export async function connectRealtimeSession(options: ConnectOptions): Promise<S
         locations: parsed.locations,
         regions: parsed.regions,
       })
+      return
+    }
+
+    if (isResponderMessage(parsed)) {
+      options.onResponderMessage?.(parsed.responder_message)
       return
     }
 

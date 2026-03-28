@@ -64,6 +64,17 @@ export default function UserView() {
             if (!mounted) return
             setLocations(data.locations)
           },
+          onResponderMessage: (content) => {
+            if (!mounted) return
+            setMessages((previous) => [...previous, {
+              id: `responder-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+              from: 'Responder',
+              to: 'broadcast',
+              content,
+              timestamp: new Date(),
+              fromType: 'Responder',
+            }])
+          },
           onDisconnect: () => {
             if (!mounted) return
             setConnectionState('Disconnected')
