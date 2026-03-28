@@ -31,7 +31,6 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/db
-      GEMINI_API_KEY: AIzaSyC-By2v5BHIUtCXlSCc6yQucYITA4KamaE
     ports:
       - "8000:8000"
     volumes:
