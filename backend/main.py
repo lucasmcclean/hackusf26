@@ -80,8 +80,7 @@ async def startup_event():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     client_id = await manager.connect(websocket)
-    await manager.send_personal_message(f"Your auto ID: {client_id}", client_id)
-    await manager.broadcast(f"New client connected: {client_id}")
+    await manager.send_personal_message(json.dumps({ "client_id": client_id }), client_id)
 
     try:
         while True:
