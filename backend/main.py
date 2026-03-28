@@ -87,11 +87,9 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             json_data = await websocket.receive_text()
             json_data = json_data.strip().strip("'").strip('"')
-            print(json_data)
             location = json.loads(json_data)
             print(location)
             # set location in the db
-            await manager.send_personal_message(f"x: {location["x"]},y: {location["y"]}", client_id)
 
     except WebSocketDisconnect:
         manager.disconnect(client_id)
