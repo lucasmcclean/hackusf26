@@ -1,10 +1,10 @@
+import { Outlet } from 'react-router'
 
 function App() {
-
   return (
-    <>
-      <h1 className="text-red-500">Hello</h1>
-    </>
+    <main className="min-h-screen bg-slate-50 text-slate-900">
+      <Outlet />
+    </main>
   )
 }
 
