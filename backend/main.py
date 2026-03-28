@@ -129,14 +129,12 @@ async def websocket_endpoint(websocket: WebSocket):
             json_data = await websocket.receive_text()
             json_data = json_data.strip().strip("'").strip('"')
             location = json.loads(json_data)
-            print(location)
             query = text("""
                 SELECT EXISTS (
                 SELECT 1 FROM users WHERE id = :client_id
                 )
                 """)
-    
-            result = db.execute(query, {"client_id": client_id}).scalar()
+            result = db.execute(query, {"user_id": client_id}).scalar()
             if result:
                 update_user(client_id, location["x"], location["y"])
             else:
@@ -150,7 +148,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.post("/switch")
 async def handle_switch(client_id: str = "", role: str = "User"):
-    if role == "User":
+    if role.lower() == "user":
         add_user(client_id, 0, 0)
     else:
         add_responder(client_id, 0, 0)
