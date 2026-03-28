@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+psycopg2-binary
+sqlalchemy
+asyncpg
+geoalchemy2
+pgvector
+
+llama-index
+llama-index-llms-google-genai
+llama-index-vector-stores-postgres
