@@ -17,7 +17,7 @@ embedding_model = HuggingFaceEmbedding(
 )
 
 user_messages_vector_store = PGVectorStore.from_params(
-    database="app_db",
+    database="db",
     host="db",
     user="postgres",
     password="postgres",
@@ -27,7 +27,7 @@ user_messages_vector_store = PGVectorStore.from_params(
 )
 
 responder_messages_vector_store = PGVectorStore.from_params(
-    database="app_db",
+    database="db",
     host="db",
     user="postgres",
     password="postgres",

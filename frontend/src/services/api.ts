@@ -111,12 +111,23 @@ function waitForOpen(socket: WebSocket, timeoutMs: number): Promise<void> {
 }
 
 async function postToBackend(path: string, payload: BackendPostPayload): Promise<Response> {
-  return fetch(`${API_BASE_URL}${path}`, {
+  const queryParams = new URLSearchParams()
+
+  queryParams.set('client_id', payload.client_id)
+  if (typeof payload.content === 'string') {
+    queryParams.set('content', payload.content)
+  }
+  if (typeof payload.role === 'string') {
+    queryParams.set('role', payload.role)
+  }
+
+  const queryString = queryParams.toString()
+  const url = queryString
+    ? `${API_BASE_URL}${path}?${queryString}`
+    : `${API_BASE_URL}${path}`
+
+  return fetch(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
   })
 }
 

@@ -131,14 +131,14 @@ async def websocket_endpoint(websocket: WebSocket):
             location = json.loads(json_data)
             query = text("""
                 SELECT EXISTS (
-                SELECT 1 FROM users WHERE id = :client_id
+                SELECT 1 FROM users WHERE id = :user_id
                 )
                 """)
             result = db.execute(query, {"user_id": client_id}).scalar()
             if result:
-                update_user(client_id, location["x"], location["y"])
+                update_user(client_id, float(location[0]), float(location[1]))
             else:
-                update_responder(client_id, location["x"], location["y"])
+                update_responder(client_id, float(location[0]), float(location[1]))
 
     except WebSocketDisconnect:
         manager.disconnect(client_id)
