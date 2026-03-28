@@ -35,7 +35,11 @@ if (!rootElement) {
 }
 
 createRoot(rootElement).render(
-  <StrictMode>
-    <RouterProvider router={router} />
-  </StrictMode>,
+  import.meta.env.DEV
+    ? <RouterProvider router={router} />
+    : (
+      <StrictMode>
+        <RouterProvider router={router} />
+      </StrictMode>
+    ),
 )
