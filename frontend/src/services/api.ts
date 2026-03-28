@@ -44,6 +44,7 @@ interface ConnectOptions {
 interface BackendPostPayload {
   client_id: string
   content?: string
+  role?: Role
 }
 
 function parseMessage(data: unknown): unknown {
@@ -128,8 +129,8 @@ export async function checkBackendHealth(): Promise<boolean> {
   }
 }
 
-export async function switchRole(clientId: string): Promise<void> {
-  await postToBackend('/switch', { client_id: clientId })
+export async function switchRole(clientId: string, role: Role): Promise<void> {
+  await postToBackend('/switch', { client_id: clientId, role })
 }
 
 export async function sendMessage(clientId: string, content: string): Promise<void> {
@@ -185,7 +186,7 @@ export async function connectRealtimeSession(options: ConnectOptions): Promise<S
 
   clientId = await waitForClientId
   options.onClientId(clientId)
-  void switchRole(clientId).catch(() => {
+  void switchRole(clientId, options.role).catch(() => {
     options.onError?.('Role sync request failed, realtime stream is still active')
   })
 
