@@ -11,6 +11,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from dotenv import load_dotenv
 import os
 
+from messages.user_message import add_user_message
+
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -120,7 +122,7 @@ async def handle_query(client_id: str = "", content: str = ""):
 async def handle_message(client_id: str = "", content: str = ""):
     current_type = "User"  # get user type from db
     if current_type == "User":
-        pass  # add a responder message to the table with this client id
+        add_user_message(content, client_id)
     else:
-        pass  # add a user message to the table with this current client id
+        await manager.broadcast(json.dumps({ "responder_message": content }));
     return {"status": "message handled"}
