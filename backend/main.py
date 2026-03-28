@@ -3,7 +3,6 @@ import json
 import uuid
 import asyncio
 from fastapi import FastAPI
-from pydantic import BaseModel
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -94,12 +93,8 @@ async def websocket_endpoint(websocket: WebSocket):
         manager.disconnect(client_id)
         await manager.broadcast(f"Client {client_id} disconnected")
 
-class Data(BaseModel):
-    client_id: str
-    content: str = ""
-
 @app.post("/switch")
-async def handle_switch(data: Data):
+async def handle_switch(client_id: str = ""):
     current_type = "User"  # get db type
     if current_type == "User":
         pass  # add a responder to the table with this client id
@@ -108,12 +103,12 @@ async def handle_switch(data: Data):
     return {"status": "switch handled"}
 
 @app.post("/query")
-async def handle_query(data: Data):
+async def handle_query(client_id: str = "", content: str = ""):
     # query the RAG
     return {"content": "stuff"}
 
 @app.post("/message")
-async def handle_message(data: Data):
+async def handle_message(client_id: str = "", content: str = ""):
     current_type = "User"  # get user type from db
     if current_type == "User":
         pass  # add a responder message to the table with this client id
