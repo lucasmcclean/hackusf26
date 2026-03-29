@@ -3,6 +3,10 @@ const WS_URL = (import.meta.env.VITE_WS_URL as string | undefined) ?? 'ws://loca
 const CONNECT_TIMEOUT_MS = 4000
 const CLIENT_ID_TIMEOUT_MS = 4000
 const LOCATION_INTERVAL_MS = 5000
+const MAX_RECONNECT_ATTEMPTS = 10
+const RECONNECT_BASE_DELAY_MS = 1000
+const RECONNECT_MAX_DELAY_MS = 15000
+const RECONNECT_JITTER_MS = 250
 
 export type Role = 'user' | 'responder'
 export type LocationTuple = [number, number]
@@ -110,6 +114,50 @@ function waitForOpen(socket: WebSocket, timeoutMs: number): Promise<void> {
   })
 }
 
+function waitForClientId(socket: WebSocket, timeoutMs: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      cleanup()
+      reject(new Error('Client id timeout'))
+    }, timeoutMs)
+
+    const cleanup = () => {
+      window.clearTimeout(timer)
+      socket.removeEventListener('message', handleMessage)
+      socket.removeEventListener('close', handleClose)
+      socket.removeEventListener('error', handleError)
+    }
+
+    const handleMessage = (event: MessageEvent) => {
+      const parsed = parseMessage(event.data)
+      if (!isClientIdMessage(parsed)) return
+
+      cleanup()
+      resolve(parsed.client_id)
+    }
+
+    const handleClose = () => {
+      cleanup()
+      reject(new Error('Socket closed before receiving client id'))
+    }
+
+    const handleError = () => {
+      cleanup()
+      reject(new Error('Socket errored before receiving client id'))
+    }
+
+    socket.addEventListener('message', handleMessage)
+    socket.addEventListener('close', handleClose, { once: true })
+    socket.addEventListener('error', handleError, { once: true })
+  })
+}
+
+function getReconnectDelayMs(attempt: number): number {
+  const exponential = Math.min(RECONNECT_BASE_DELAY_MS * (2 ** Math.max(attempt - 1, 0)), RECONNECT_MAX_DELAY_MS)
+  const jitter = Math.floor(Math.random() * RECONNECT_JITTER_MS)
+  return exponential + jitter
+}
+
 async function postToBackend(path: string, payload: BackendPostPayload): Promise<Response> {
   const queryParams = new URLSearchParams()
 
@@ -160,99 +208,145 @@ export async function queryMessages(clientId: string, content: string): Promise<
 }
 
 export async function connectRealtimeSession(options: ConnectOptions): Promise<SessionController> {
-  const socket = new WebSocket(WS_URL)
   let currentLocation = options.location ?? null
-  let clientId = ''
+  let activeSocket: WebSocket | null = null
   let locationIntervalId: number | null = null
+  let reconnectTimerId: number | null = null
+  let manuallyClosed = false
+  let isConnecting = false
+  let reconnectAttempts = 0
 
-  await waitForOpen(socket, CONNECT_TIMEOUT_MS)
-
-  const startLocationUpdates = () => {
-    if (locationIntervalId !== null) {
-      window.clearInterval(locationIntervalId)
-    }
-
-    locationIntervalId = window.setInterval(() => {
-      if (!currentLocation || socket.readyState !== WebSocket.OPEN) return
-      socket.send(JSON.stringify(currentLocation))
-    }, LOCATION_INTERVAL_MS)
-  }
-
-  const waitForClientId = new Promise<string>((resolve, reject) => {
-    const timer = window.setTimeout(() => {
-      reject(new Error('Client id timeout'))
-    }, CLIENT_ID_TIMEOUT_MS)
-
-    const handleMessage = (event: MessageEvent) => {
-      const parsed = parseMessage(event.data)
-      if (!isClientIdMessage(parsed)) return
-
-      window.clearTimeout(timer)
-      socket.removeEventListener('message', handleMessage)
-      resolve(parsed.client_id)
-    }
-
-    socket.addEventListener('message', handleMessage)
-  })
-
-  clientId = await waitForClientId
-  options.onClientId(clientId)
-  void switchRole(clientId, options.role).catch(() => {
-    options.onError?.('Role sync request failed, realtime stream is still active')
-  })
-
-  if (currentLocation && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify(currentLocation))
-  }
-
-  startLocationUpdates()
-
-  socket.addEventListener('message', (event) => {
-    const parsed = parseMessage(event.data)
-
-    if (isClientIdMessage(parsed)) {
-      return
-    }
-
-    if (isBroadcastMessage(parsed)) {
-      options.onData({
-        locations: parsed.locations,
-        regions: parsed.regions,
-      })
-      return
-    }
-
-    if (isResponderMessage(parsed)) {
-      options.onResponderMessage?.(parsed.responder_message)
-      return
-    }
-
-    // Non-JSON text messages are informational broadcasts from backend.
-  })
-
-  socket.addEventListener('close', () => {
+  const clearLocationUpdates = () => {
     if (locationIntervalId !== null) {
       window.clearInterval(locationIntervalId)
       locationIntervalId = null
     }
-    options.onDisconnect?.('Realtime connection closed')
-  })
+  }
 
-  socket.addEventListener('error', () => {
-    options.onError?.('WebSocket encountered an error')
-  })
+  const clearReconnectTimer = () => {
+    if (reconnectTimerId !== null) {
+      window.clearTimeout(reconnectTimerId)
+      reconnectTimerId = null
+    }
+  }
+
+  const startLocationUpdates = () => {
+    clearLocationUpdates()
+
+    locationIntervalId = window.setInterval(() => {
+      if (!currentLocation || !activeSocket || activeSocket.readyState !== WebSocket.OPEN) return
+      activeSocket.send(JSON.stringify(currentLocation))
+    }, LOCATION_INTERVAL_MS)
+  }
+
+  const scheduleReconnect = (reason: string) => {
+    if (manuallyClosed) return
+    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      options.onDisconnect?.('Realtime connection closed after max reconnect attempts')
+      return
+    }
+
+    reconnectAttempts += 1
+    const delayMs = getReconnectDelayMs(reconnectAttempts)
+    options.onDisconnect?.(`${reason}. Reconnecting (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`)
+
+    clearReconnectTimer()
+    reconnectTimerId = window.setTimeout(() => {
+      reconnectTimerId = null
+      void connectSocket()
+    }, delayMs)
+  }
+
+  const connectSocket = async () => {
+    if (manuallyClosed || isConnecting) return
+    isConnecting = true
+
+    try {
+      const socket = new WebSocket(WS_URL)
+      await waitForOpen(socket, CONNECT_TIMEOUT_MS)
+      const clientId = await waitForClientId(socket, CLIENT_ID_TIMEOUT_MS)
+
+      if (manuallyClosed) {
+        socket.close()
+        return
+      }
+
+      activeSocket = socket
+      reconnectAttempts = 0
+      options.onClientId(clientId)
+
+      void switchRole(clientId, options.role).catch(() => {
+        options.onError?.('Role sync request failed, realtime stream is still active')
+      })
+
+      if (currentLocation && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify(currentLocation))
+      }
+
+      startLocationUpdates()
+
+      socket.addEventListener('message', (event) => {
+        const parsed = parseMessage(event.data)
+
+        if (isClientIdMessage(parsed)) {
+          return
+        }
+
+        if (isBroadcastMessage(parsed)) {
+          options.onData({
+            locations: parsed.locations,
+            regions: parsed.regions,
+          })
+          return
+        }
+
+        if (isResponderMessage(parsed)) {
+          options.onResponderMessage?.(parsed.responder_message)
+          return
+        }
+
+        // Non-JSON text messages are informational broadcasts from backend.
+      })
+
+      socket.addEventListener('close', () => {
+        if (activeSocket === socket) {
+          activeSocket = null
+        }
+        clearLocationUpdates()
+        if (manuallyClosed) {
+          options.onDisconnect?.('Realtime connection closed')
+          return
+        }
+        scheduleReconnect('Realtime connection lost')
+      })
+
+      socket.addEventListener('error', () => {
+        options.onError?.('WebSocket encountered an error')
+      })
+    } catch {
+      clearLocationUpdates()
+      scheduleReconnect('Failed to establish realtime connection')
+    } finally {
+      isConnecting = false
+    }
+  }
+
+  await connectSocket()
 
   return {
     close: () => {
-      if (locationIntervalId !== null) {
-        window.clearInterval(locationIntervalId)
+      manuallyClosed = true
+      clearReconnectTimer()
+      clearLocationUpdates()
+      if (activeSocket && activeSocket.readyState <= WebSocket.OPEN) {
+        activeSocket.close()
       }
-      socket.close()
+      activeSocket = null
     },
     sendLocation: (location: LocationTuple) => {
       currentLocation = location
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify(location))
+      if (activeSocket && activeSocket.readyState === WebSocket.OPEN) {
+        activeSocket.send(JSON.stringify(location))
       }
     },
   }
