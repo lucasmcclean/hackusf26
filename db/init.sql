@@ -26,7 +26,8 @@ CREATE INDEX idx_responder_messages_time ON responder_messages(time);
 
 CREATE TABLE users (
   id TEXT PRIMARY KEY,
-  location_geom GEOGRAPHY(POINT, 4326)
+  location_geom GEOGRAPHY(POINT, 4326),
+  priority INT DEFAULT 0
 );
 
 CREATE TABLE responders (

@@ -95,19 +95,19 @@ async def broadcast_periodic():
                            ST_X(location_geom::geometry) AS longitude,
                            priority
                     FROM users;
-                """))
+                """)).mappings().all()
 
                 # Fetch locations from responders
                 responders_result = db.execute(text("""
                     SELECT ST_Y(location_geom::geometry) AS latitude,
                            ST_X(location_geom::geometry) AS longitude
                     FROM responders;
-                """))
+                """)).mappings().all()
 
-                all_locations = [list(row[:2]) + [0] for row in users_result] + [list(row[:2]) + [1] for row in responders_result]
+                all_locations = [[row.latitude, row.longitude, 0] for row in users_result] + [[row.latitude, row.longitude, 1] for row in responders_result]
 
-                print(list(users_result))
-                regions = priority_polygons(list(users_result))
+                points = [[row.latitude, row.longitude, row.priority] for row in users_result]
+                regions = priority_polygons(points)
                 if regions != prev_regions:
                     print("Changed regions")
                 prev_regions = regions
