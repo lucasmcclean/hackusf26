@@ -13,6 +13,7 @@ from responders.responder import add_responder, update_responder
 from responders.responder_message import add_responder_message
 from users.user import add_user, update_user
 from users.user_message import add_user_message, query_user_messages
+from regions.region_gen import priority_polygons
 
 load_dotenv()
 
@@ -100,7 +101,7 @@ async def broadcast_periodic():
 
                 all_locations = [list(row) for row in users_result] + [list(row) for row in responders_result]
 
-                regions = [[1, 2], [3]]
+                regions = priority_polygons(all_locations)
 
                 return all_locations, regions
             finally:

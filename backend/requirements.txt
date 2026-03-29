@@ -10,3 +10,6 @@ llama-index
 llama-index-llms-google-genai
 llama_index.embeddings.huggingface
 llama-index-vector-stores-postgres
+
+numpy
+scipy
