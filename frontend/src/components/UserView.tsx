@@ -43,6 +43,11 @@ export default function UserView() {
   const [sessionController, setSessionController] = useState<SessionController | null>(null)
 
   useEffect(() => {
+    console.log("Locations")
+    console.log(locations)
+  }, [locations])
+
+  useEffect(() => {
     let sessionController: SessionController | null = null
     let mounted = true
 
@@ -62,6 +67,8 @@ export default function UserView() {
             setConnectionState('Connected')
           },
           onData: (data) => {
+            console.log("entering")
+            console.log(data)
             if (!mounted) return
             setLocations(data.locations)
           },

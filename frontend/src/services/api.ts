@@ -17,8 +17,8 @@ interface ClientIdMessage {
 }
 
 interface BroadcastMessage {
-  locations: LocationTuple[]
-  regions: RegionGroup[]
+  locations?: unknown
+  regions?: unknown
 }
 
 interface ResponderMessage {
@@ -69,7 +69,14 @@ function isLocationTuple(value: unknown): value is LocationTuple {
   if (!Array.isArray(value) || value.length < 2) return false
   const lat = Number(value[0])
   const lon = Number(value[1])
-  return Number.isFinite(lat) && Number.isFinite(lon)
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false
+
+  if (value.length >= 3 && value[2] !== undefined && value[2] !== null) {
+    const role = Number(value[2])
+    if (!Number.isFinite(role)) return false
+  }
+
+  return true
 }
 
 function isRegionGroup(value: unknown): value is RegionGroup {
@@ -80,10 +87,38 @@ function isBroadcastMessage(value: unknown): value is BroadcastMessage {
   if (typeof value !== 'object' || value === null) return false
   const candidate = value as Partial<BroadcastMessage>
 
-  if (!Array.isArray(candidate.locations) || !Array.isArray(candidate.regions)) return false
+  return Array.isArray(candidate.locations)
+}
 
-  return candidate.locations.every((entry) => isLocationTuple(entry))
-    && candidate.regions.every((entry) => isRegionGroup(entry))
+function normalizeLocationTuple(value: unknown): LocationTuple | null {
+  if (!isLocationTuple(value)) return null
+  const lat = Number(value[0])
+  const lon = Number(value[1])
+  const role = value.length >= 3 && value[2] !== undefined && value[2] !== null
+    ? Number(value[2])
+    : undefined
+
+  return role === undefined ? [lat, lon] : [lat, lon, role]
+}
+
+function normalizeBroadcastData(value: BroadcastMessage): BackendData | null {
+  if (!Array.isArray(value.locations)) return null
+
+  const normalizedLocations = value.locations
+    .map((entry) => normalizeLocationTuple(entry))
+
+  if (normalizedLocations.some((entry) => entry === null)) return null
+
+  const locations = normalizedLocations as LocationTuple[]
+
+  const regions = Array.isArray(value.regions) && value.regions.every((entry) => isRegionGroup(entry))
+    ? value.regions
+    : []
+
+  return {
+    locations,
+    regions,
+  }
 }
 
 function isResponderMessage(value: unknown): value is ResponderMessage {
@@ -293,10 +328,10 @@ export async function connectRealtimeSession(options: ConnectOptions): Promise<S
         }
 
         if (isBroadcastMessage(parsed)) {
-          options.onData({
-            locations: parsed.locations,
-            regions: parsed.regions,
-          })
+          const normalized = normalizeBroadcastData(parsed)
+          if (normalized) {
+            options.onData(normalized)
+          }
           return
         }
 
