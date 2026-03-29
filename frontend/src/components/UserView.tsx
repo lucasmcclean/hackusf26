@@ -67,9 +67,6 @@ export default function UserView() {
             if (!mounted) return
             setLocations(data.locations)
             setRegions(data.regions)
-            if (data.regionDebug) {
-              console.debug('Region debug (user)', data.regionDebug)
-            }
           },
           onResponderMessage: (content) => {
             if (!mounted) return

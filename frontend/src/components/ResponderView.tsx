@@ -86,9 +86,6 @@ export default function ResponderView() {
             if (!mounted) return
             setLocations(data.locations)
             setRegions(data.regions)
-            if (data.regionDebug) {
-              console.debug('Region debug (responder)', data.regionDebug)
-            }
           },
           onDisconnect: () => {
             if (!mounted) return
@@ -284,6 +281,18 @@ export default function ResponderView() {
     }
   }
 
+  useEffect(() => {
+    const handleEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setIsRegionReportModalOpen(false)
+      setIsUserMessagesModalOpen(false)
+    }
+
+    if (!isRegionReportModalOpen && !isUserMessagesModalOpen) return
+    window.addEventListener('keydown', handleEscape)
+    return () => window.removeEventListener('keydown', handleEscape)
+  }, [isRegionReportModalOpen, isUserMessagesModalOpen])
+
   return (
     <div className="h-screen flex flex-col bg-transparent">
       <header className="px-5 pt-5 md:px-6 md:pt-6">
@@ -455,8 +464,11 @@ export default function ResponderView() {
       </div>
 
       {isRegionReportModalOpen && regionReport && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(3,8,15,0.75)] p-4">
-          <div className="panel-glass w-full max-w-4xl max-h-[88vh] rounded-2xl p-5 flex flex-col">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(3,8,15,0.75)] p-4"
+          onClick={() => setIsRegionReportModalOpen(false)}
+        >
+          <div className="panel-glass w-full max-w-4xl max-h-[88vh] rounded-2xl p-5 flex flex-col" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4 mb-4">
               <div>
                 <div className="soft-label">Region report</div>
@@ -480,8 +492,11 @@ export default function ResponderView() {
       )}
 
       {isUserMessagesModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(3,8,15,0.75)] p-4">
-          <div className="panel-glass w-full max-w-3xl max-h-[85vh] rounded-2xl p-5 flex flex-col">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(3,8,15,0.75)] p-4"
+          onClick={() => setIsUserMessagesModalOpen(false)}
+        >
+          <div className="panel-glass w-full max-w-3xl max-h-[85vh] rounded-2xl p-5 flex flex-col" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4 mb-4">
               <div>
                 <div className="soft-label">User messages</div>

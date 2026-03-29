@@ -663,11 +663,6 @@ export function MapCanvas({ locations, regions = [], onRegionClick, onPointClick
       const regionsSource = map.getSource('regions') as GeoJSONSource | undefined
       regionsSource?.setData(latestRegionsGeoJsonRef.current)
 
-      console.debug('MapCanvas load snapshot', {
-        pointFeatures: latestPointsGeoJsonRef.current.features.length,
-        regionFeatures: latestRegionsGeoJsonRef.current.features.length,
-      })
-
       map.on('mouseenter', 'regions-fill', () => {
         map.getCanvas().style.cursor = 'pointer'
       })
@@ -907,11 +902,6 @@ export function MapCanvas({ locations, regions = [], onRegionClick, onPointClick
     spiderfiedGroupIndicesRef.current = []
     spiderAnchorPixelRef.current = null
     spiderActiveRadiusRef.current = 0
-    if (!source) {
-      console.debug('MapCanvas points source missing on update', {
-        features: pointsGeoJson.features.length,
-      })
-    }
   }, [pointsGeoJson])
 
   useEffect(() => {
@@ -920,11 +910,6 @@ export function MapCanvas({ locations, regions = [], onRegionClick, onPointClick
 
     const regionsSource = map.getSource('regions') as GeoJSONSource | undefined
     regionsSource?.setData(regionsGeoJson)
-    console.debug('MapCanvas region update', {
-      incomingRegions: regions.length,
-      polygonFeatures: regionsGeoJson.features.length,
-      sourceReady: Boolean(regionsSource),
-    })
   }, [regionsGeoJson])
 
   return (
@@ -937,6 +922,14 @@ export function MapCanvas({ locations, regions = [], onRegionClick, onPointClick
       )}
       <div className="pointer-events-none absolute bottom-3 left-3 rounded-md border border-[var(--border-soft)] bg-[rgba(8,16,29,0.72)] px-2 py-1 text-[10px] text-[var(--text-muted)]">
         Tampa focus area enabled
+      </div>
+      <div className="pointer-events-none absolute bottom-3 right-3 rounded-lg border border-[var(--border-soft)] bg-[rgba(8,16,29,0.8)] px-3 py-2 text-[10px] text-[var(--text-primary)]">
+        <div className="mb-1 flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[rgba(75,201,120,0.98)]" />You</div>
+        <div className="mb-1 flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[rgba(74,158,255,0.95)]" />User</div>
+        <div className="mb-1 flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[rgba(255,110,110,0.95)]" />Responder</div>
+        <div className="mt-1 border-t border-[var(--border-soft)] pt-1 text-[9px] text-[var(--text-muted)]">Region scale: green low to red high</div>
+        <div className="text-[9px] text-[var(--text-muted)]">Shift+click or right-click region for report</div>
+        <div className="text-[9px] text-[var(--text-muted)]">Right-click user node for message history</div>
       </div>
     </div>
   )
