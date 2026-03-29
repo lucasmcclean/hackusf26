@@ -1,10 +1,10 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import json
 import uuid
 import asyncio
 from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.orm import sessionmaker, declarative_base, Session
 
 from dotenv import load_dotenv
 import os
@@ -84,7 +84,7 @@ async def broadcast_periodic():
 
     while True:
         await asyncio.sleep(5)
-
+        prev_regions = None
         def get_locations_sync():
             nonlocal prev_regions
             db = SessionLocal()
