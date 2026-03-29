@@ -81,6 +81,20 @@ SIM_SPAWN_PROB = min(1.0, max(0.0, _env_float("SIM_SPAWN_PROB", 0.01)))
 SIM_MOVE_PROB = min(1.0, max(0.0, _env_float("SIM_MOVE_PROB", 0.2)))
 SIM_MESSAGE_PROB = min(1.0, max(0.0, _env_float("SIM_MESSAGE_PROB", 0.05)))
 
+# Fixed simulation hubs for repeatable clustered behavior in Tampa.
+# Each hub is (lat, lon, weight, severity_bias).
+SIM_HUBS: list[tuple[float, float, float, float]] = [
+    (27.936, -82.458, 1.4, 0.70),
+    (28.058, -82.416, 1.2, 0.65),
+    (27.878, -82.553, 0.9, 0.55),
+    (28.121, -82.305, 0.8, 0.45),
+]
+
+SIM_SPAWN_USER_JITTER = max(0.0003, _env_float("SIM_SPAWN_USER_JITTER", 0.007))
+SIM_SPAWN_RESPONDER_JITTER = max(0.0003, _env_float("SIM_SPAWN_RESPONDER_JITTER", 0.010))
+SIM_HUB_PULL = min(1.0, max(0.0, _env_float("SIM_HUB_PULL", 0.03)))
+SIM_MESSAGE_HUB_BIAS = min(1.0, max(0.0, _env_float("SIM_MESSAGE_HUB_BIAS", 0.1)))
+
 def _is_zero_point(lat: float, lon: float) -> bool:
     return abs(lat) < 1e-9 and abs(lon) < 1e-9
 
@@ -111,6 +125,25 @@ def _random_tampa_point() -> tuple[float, float]:
     return lat, lon
 
 
+def _pick_sim_hub() -> tuple[float, float, float, float]:
+    weights = [hub[2] for hub in SIM_HUBS]
+    return random.choices(SIM_HUBS, weights=weights, k=1)[0]
+
+
+def _closest_sim_hub(lat: float, lon: float) -> tuple[float, float, float, float]:
+    return min(
+        SIM_HUBS,
+        key=lambda hub: (lat - hub[0]) ** 2 + (lon - hub[1]) ** 2,
+    )
+
+
+def _point_around_hub(hub: tuple[float, float, float, float], jitter: float) -> tuple[float, float]:
+    # Slightly elliptical jitter creates natural-looking clusters.
+    lat = _clamp(hub[0] + random.gauss(0, jitter), TAMPA_MIN_LAT, TAMPA_MAX_LAT)
+    lon = _clamp(hub[1] + random.gauss(0, jitter * 1.15), TAMPA_MIN_LON, TAMPA_MAX_LON)
+    return lat, lon
+
+
 def _random_sim_user_id() -> str:
     return f"{SIM_USER_PREFIX}{uuid.uuid4()}"
 
@@ -131,6 +164,12 @@ SIMULATED_MESSAGE_TEMPLATES = [
     "Phone signal is unstable and we cannot reach nearby responders reliably.",
     "Flash flooding just started and we need urgent evacuation guidance.",
 ]
+
+
+def _priority_for_hub(hub: tuple[float, float, float, float]) -> int:
+    severity = hub[3]
+    baseline = int(round(severity * 8))
+    return int(_clamp(baseline + random.randint(-2, 3), 0, 10))
 
 def get_db():
     db = SessionLocal()
@@ -326,6 +365,7 @@ def _run_simulation_step_sync():
                 "latitude": float(row.latitude),
                 "longitude": float(row.longitude),
                 "priority": int(row.priority) if row.priority is not None else 0,
+                "hub": _closest_sim_hub(float(row.latitude), float(row.longitude)),
             }
             for row in sim_users
             if _is_valid_map_point(row.latitude, row.longitude)
@@ -336,6 +376,7 @@ def _run_simulation_step_sync():
                 "id": str(row.id),
                 "latitude": float(row.latitude),
                 "longitude": float(row.longitude),
+                "hub": _closest_sim_hub(float(row.latitude), float(row.longitude)),
             }
             for row in sim_responders
             if _is_valid_map_point(row.latitude, row.longitude)
@@ -343,7 +384,8 @@ def _run_simulation_step_sync():
 
         while len(users) < SIM_MIN_USERS:
             user_id = _random_sim_user_id()
-            lat, lon = _random_tampa_point()
+            hub = _pick_sim_hub()
+            lat, lon = _point_around_hub(hub, SIM_SPAWN_USER_JITTER)
             conn.execute(text("""
                 INSERT INTO users (id, priority, location_geom)
                 VALUES (
@@ -353,11 +395,12 @@ def _run_simulation_step_sync():
                 )
                 ON CONFLICT (id) DO NOTHING
             """), {"id": user_id, "lat": lat, "lon": lon})
-            users.append({"id": user_id, "latitude": lat, "longitude": lon, "priority": 0})
+            users.append({"id": user_id, "latitude": lat, "longitude": lon, "priority": 0, "hub": hub})
 
         while len(responders) < SIM_MIN_RESPONDERS:
             responder_id = _random_sim_responder_id()
-            lat, lon = _random_tampa_point()
+            hub = _pick_sim_hub()
+            lat, lon = _point_around_hub(hub, SIM_SPAWN_RESPONDER_JITTER)
             conn.execute(text("""
                 INSERT INTO responders (id, location_geom)
                 VALUES (
@@ -366,11 +409,12 @@ def _run_simulation_step_sync():
                 )
                 ON CONFLICT (id) DO NOTHING
             """), {"id": responder_id, "lat": lat, "lon": lon})
-            responders.append({"id": responder_id, "latitude": lat, "longitude": lon})
+            responders.append({"id": responder_id, "latitude": lat, "longitude": lon, "hub": hub})
 
         if len(users) < SIM_MAX_USERS and random.random() < SIM_SPAWN_PROB:
             user_id = _random_sim_user_id()
-            lat, lon = _random_tampa_point()
+            hub = _pick_sim_hub()
+            lat, lon = _point_around_hub(hub, SIM_SPAWN_USER_JITTER)
             conn.execute(text("""
                 INSERT INTO users (id, priority, location_geom)
                 VALUES (
@@ -380,11 +424,12 @@ def _run_simulation_step_sync():
                 )
                 ON CONFLICT (id) DO NOTHING
             """), {"id": user_id, "lat": lat, "lon": lon})
-            users.append({"id": user_id, "latitude": lat, "longitude": lon, "priority": 0})
+            users.append({"id": user_id, "latitude": lat, "longitude": lon, "priority": 0, "hub": hub})
 
         if len(responders) < SIM_MAX_RESPONDERS and random.random() < SIM_SPAWN_PROB * 0.75:
             responder_id = _random_sim_responder_id()
-            lat, lon = _random_tampa_point()
+            hub = _pick_sim_hub()
+            lat, lon = _point_around_hub(hub, SIM_SPAWN_RESPONDER_JITTER)
             conn.execute(text("""
                 INSERT INTO responders (id, location_geom)
                 VALUES (
@@ -393,13 +438,16 @@ def _run_simulation_step_sync():
                 )
                 ON CONFLICT (id) DO NOTHING
             """), {"id": responder_id, "lat": lat, "lon": lon})
-            responders.append({"id": responder_id, "latitude": lat, "longitude": lon})
+            responders.append({"id": responder_id, "latitude": lat, "longitude": lon, "hub": hub})
 
         for user in users:
             if random.random() > SIM_MOVE_PROB:
                 continue
-            next_lat = _clamp(user["latitude"] + random.uniform(-0.00012, 0.00012), TAMPA_MIN_LAT, TAMPA_MAX_LAT)
-            next_lon = _clamp(user["longitude"] + random.uniform(-0.00012, 0.00012), TAMPA_MIN_LON, TAMPA_MAX_LON)
+            hub = user.get("hub") or _closest_sim_hub(user["latitude"], user["longitude"])
+            to_hub_lat = (hub[0] - user["latitude"]) * SIM_HUB_PULL
+            to_hub_lon = (hub[1] - user["longitude"]) * SIM_HUB_PULL
+            next_lat = _clamp(user["latitude"] + random.uniform(-0.00016, 0.00016) + to_hub_lat, TAMPA_MIN_LAT, TAMPA_MAX_LAT)
+            next_lon = _clamp(user["longitude"] + random.uniform(-0.00016, 0.00016) + to_hub_lon, TAMPA_MIN_LON, TAMPA_MAX_LON)
             conn.execute(text("""
                 UPDATE users
                 SET location_geom = ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography
@@ -407,12 +455,16 @@ def _run_simulation_step_sync():
             """), {"id": user["id"], "lat": next_lat, "lon": next_lon, "prefix": f"{SIM_USER_PREFIX}%"})
             user["latitude"] = next_lat
             user["longitude"] = next_lon
+            user["hub"] = hub
 
         for responder in responders:
             if random.random() > SIM_MOVE_PROB:
                 continue
-            next_lat = _clamp(responder["latitude"] + random.uniform(-0.00014, 0.00014), TAMPA_MIN_LAT, TAMPA_MAX_LAT)
-            next_lon = _clamp(responder["longitude"] + random.uniform(-0.00014, 0.00014), TAMPA_MIN_LON, TAMPA_MAX_LON)
+            hub = responder.get("hub") or _closest_sim_hub(responder["latitude"], responder["longitude"])
+            to_hub_lat = (hub[0] - responder["latitude"]) * SIM_HUB_PULL
+            to_hub_lon = (hub[1] - responder["longitude"]) * SIM_HUB_PULL
+            next_lat = _clamp(responder["latitude"] + random.uniform(-0.00018, 0.00018) + to_hub_lat, TAMPA_MIN_LAT, TAMPA_MAX_LAT)
+            next_lon = _clamp(responder["longitude"] + random.uniform(-0.00018, 0.00018) + to_hub_lon, TAMPA_MIN_LON, TAMPA_MAX_LON)
             conn.execute(text("""
                 UPDATE responders
                 SET location_geom = ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography
@@ -420,10 +472,19 @@ def _run_simulation_step_sync():
             """), {"id": responder["id"], "lat": next_lat, "lon": next_lon, "prefix": f"{SIM_RESPONDER_PREFIX}%"})
             responder["latitude"] = next_lat
             responder["longitude"] = next_lon
+            responder["hub"] = hub
 
     if users and random.random() < SIM_MESSAGE_PROB:
-        selected = random.choice(users)
-        generated_priority = random.randint(0, 10)
+        user_weights = []
+        for user in users:
+            hub = user.get("hub") or _closest_sim_hub(user["latitude"], user["longitude"])
+            severity = hub[3]
+            weight = 1.0 + severity * (2.4 * SIM_MESSAGE_HUB_BIAS)
+            user_weights.append(weight)
+
+        selected = random.choices(users, weights=user_weights, k=1)[0]
+        selected_hub = selected.get("hub") or _closest_sim_hub(selected["latitude"], selected["longitude"])
+        generated_priority = _priority_for_hub(selected_hub)
         content = random.choice(SIMULATED_MESSAGE_TEMPLATES)
         add_simulated_user_message(
             content=content,
@@ -431,7 +492,7 @@ def _run_simulation_step_sync():
             priority=generated_priority,
             lat=selected["latitude"],
             lon=selected["longitude"],
-            extra_metadata={"simulated": True},
+            extra_metadata={"simulated": True, "hub_lat": selected_hub[0], "hub_lon": selected_hub[1]},
         )
 
 
