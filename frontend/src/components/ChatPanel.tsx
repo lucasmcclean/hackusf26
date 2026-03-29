@@ -41,7 +41,6 @@ export function ChatPanel({
     }
   }
 
-  // Filter messages relevant to current user
   const relevantMessages = messages.filter((msg) => (
     msg.from === currentUserId
     || msg.to === currentUserId
@@ -49,46 +48,47 @@ export function ChatPanel({
     || msg.fromType === 'System'
   )).sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
 
+  const chatTitle = showBroadcast
+    ? 'Community Broadcasts'
+    : `${currentUserType === 'User' ? 'Survivor' : currentUserType} Messages`
+
   return (
-    <div className="flex flex-col h-full bg-white rounded-lg border border-gray-300">
-      {/* Header */}
-      <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
-        <h3 className="font-semibold">
-          {showBroadcast ? 'Broadcast Messages' : `${currentUserType} Messages`}
-        </h3>
+    <div className="flex h-full min-h-0 flex-col panel-glass rounded-2xl overflow-hidden">
+      <div className="border-b border-[var(--border-soft)] bg-[rgba(9,18,32,0.78)] px-4 py-3">
+        <div className="soft-label">Communications</div>
+        <h3 className="mt-1 font-semibold text-[var(--text-strong)]">{chatTitle}</h3>
       </div>
 
-      {/* Messages area */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+      <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-[rgba(8,15,26,0.66)]">
         {relevantMessages.length === 0 ? (
-          <p className="text-gray-500 text-center mt-8">No messages yet</p>
+          <p className="text-[var(--text-muted)] text-center mt-8">No messages yet. You are all set.</p>
         ) : (
           relevantMessages.map(msg => {
-            const isFromMe = msg.from === currentUserId;
-            const isBroadcast = msg.to === "broadcast";
+            const isFromMe = msg.from === currentUserId
+            const isBroadcast = msg.to === 'broadcast'
 
             return (
               <div
                 key={msg.id}
-                className={`flex ${isFromMe ? "justify-end" : "justify-start"}`}
+                className={`flex ${isFromMe ? 'justify-end' : 'justify-start'}`}
               >
                 <div
-                  className={`max-w-[70%] rounded-lg px-4 py-2 ${
+                  className={`max-w-[74%] rounded-2xl px-4 py-2.5 border ${
                     isBroadcast
-                      ? 'bg-yellow-100 border border-yellow-300'
+                      ? 'bg-[rgba(255,190,77,0.14)] border-[rgba(255,190,77,0.44)] text-[#ffe6be]'
                       : isFromMe
-                        ? 'bg-blue-500 text-white'
-                        : 'bg-gray-200 text-gray-900'
+                        ? 'bg-[rgba(53,184,255,0.2)] border-[rgba(86,194,255,0.58)] text-[#e8f6ff]'
+                        : 'bg-[rgba(154,178,209,0.12)] border-[rgba(141,169,203,0.38)] text-[var(--text-primary)]'
                   }`}
                 >
                   {!isFromMe && (
-                    <div className="text-xs font-semibold mb-1 opacity-70">
-                      {msg.fromType === 'Responder' ? '🚨 ' : msg.fromType === 'User' ? '👤 ' : 'ℹ️ '}
+                    <div className="text-xs font-semibold mb-1 opacity-85">
+                      {msg.fromType === 'Responder' ? 'Responder ' : msg.fromType === 'User' ? 'Survivor ' : 'Notice '}
                       {msg.from}
                     </div>
                   )}
                   <div className="text-sm">{msg.content}</div>
-                  <div className={`text-xs mt-1 ${isFromMe ? 'text-blue-100' : 'text-gray-500'}`}>
+                  <div className={`text-xs mt-1 ${isFromMe ? 'text-[#bfe7ff]' : 'text-[var(--text-muted)]'}`}>
                     {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </div>
                 </div>
@@ -98,11 +98,10 @@ export function ChatPanel({
         )}
       </div>
 
-      {/* Input area */}
-      <div className="p-4 border-t border-gray-200">
+      <div className="border-t border-[var(--border-soft)] bg-[rgba(9,18,32,0.82)] p-4">
         {showBroadcast && (
-          <div className="text-xs text-orange-600 mb-2 bg-orange-50 px-2 py-1 rounded">
-            ⚠️ This message will be sent to all users
+          <div className="mb-2 rounded-md border border-[rgba(255,190,77,0.44)] bg-[rgba(255,190,77,0.12)] px-2 py-1 text-xs text-[#ffe0af]">
+            This message will be shared with all Survivors
           </div>
         )}
         <div className="flex gap-2">
@@ -111,13 +110,13 @@ export function ChatPanel({
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value)}
             onKeyPress={handleKeyPress}
-            placeholder={showBroadcast ? "Type broadcast message..." : "Type a message..."}
-            className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder={showBroadcast ? 'Type a community update...' : 'Type your message...'}
+            className="flex-1 rounded-lg border border-[var(--border-soft)] bg-[rgba(8,16,29,0.88)] px-3 py-2 text-[var(--text-strong)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
           />
           <button
             onClick={handleSend}
             disabled={!newMessage.trim()}
-            className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            className="btn-primary flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Send size={18} />
             Send

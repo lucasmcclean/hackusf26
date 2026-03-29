@@ -26,16 +26,17 @@ function getCurrentLocation(): Promise<LocationTuple | null> {
 }
 
 function getLocationErrorMessage(error: GeolocationPositionError): string {
-  if (error.code === 1) return 'Permission denied'
-  if (error.code === 2) return 'Location unavailable'
-  if (error.code === 3) return 'Location timeout'
-  return 'Location error'
+  if (error.code === 1) return 'Location permission is off'
+  if (error.code === 2) return 'Location is temporarily unavailable'
+  if (error.code === 3) return 'Location request timed out'
+  return 'Location not available'
 }
 
 export default function UserView() {
   const [clientId, setClientId] = useState('connecting...')
   const [connectionState, setConnectionState] = useState('Connecting')
-  const [locationState, setLocationState] = useState('Locating')
+  const [connectionPhase, setConnectionPhase] = useState('Preparing your secure session')
+  const [locationState, setLocationState] = useState('Finding your location')
   const [locationRetryKey, setLocationRetryKey] = useState(0)
   const [locations, setLocations] = useState<LocationTuple[]>([])
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -105,13 +106,47 @@ export default function UserView() {
   }, [])
 
   useEffect(() => {
-    if (!sessionController) return
-    if (!navigator.geolocation) {
-      setLocationState('Geolocation unsupported')
+    if (connectionState === 'Connected') {
+      setConnectionPhase('Live updates are ready')
       return
     }
 
-    setLocationState('Locating')
+    if (connectionState === 'Disconnected') {
+      setConnectionPhase('Reconnecting to live updates')
+      return
+    }
+
+    if (connectionState === 'Error') {
+      setConnectionPhase('Unable to connect right now')
+      return
+    }
+
+    const phases = [
+      'Preparing your secure session',
+      'Connecting to support services',
+      'Syncing live updates',
+    ]
+
+    setConnectionPhase(phases[0])
+    let phaseIndex = 0
+    const phaseInterval = window.setInterval(() => {
+      phaseIndex = Math.min(phaseIndex + 1, phases.length - 1)
+      setConnectionPhase(phases[phaseIndex])
+    }, 1150)
+
+    return () => {
+      window.clearInterval(phaseInterval)
+    }
+  }, [connectionState])
+
+  useEffect(() => {
+    if (!sessionController) return
+    if (!navigator.geolocation) {
+      setLocationState('Location sharing is not supported on this device')
+      return
+    }
+
+    setLocationState('Finding your location')
 
     const watchId = navigator.geolocation.watchPosition(
       (position) => {
@@ -131,10 +166,18 @@ export default function UserView() {
   }, [sessionController, locationRetryKey])
 
   const liveBadgeClass = useMemo(() => {
-    if (connectionState === 'Connected') return 'bg-green-600'
-    if (connectionState === 'Connecting') return 'bg-amber-500'
-    return 'bg-red-600'
+    if (connectionState === 'Connected') return 'bg-[var(--success)]'
+    if (connectionState === 'Connecting') return 'bg-[var(--warning)]'
+    return 'bg-[var(--danger)]'
   }, [connectionState])
+
+  const connectionStep = useMemo(() => {
+    if (connectionState === 'Connected') return 3
+    if (connectionState === 'Disconnected' || connectionState === 'Error') return 1
+    if (connectionPhase.includes('Connecting')) return 1
+    if (connectionPhase.includes('Syncing')) return 2
+    return 0
+  }, [connectionPhase, connectionState])
 
   const handleSendMessage = async (content: string) => {
     if (!clientId || clientId === 'connecting...') return
@@ -157,7 +200,7 @@ export default function UserView() {
         id: `system-${Date.now()}`,
         from: 'system',
         to: clientId,
-        content: 'Failed to deliver message to backend /message endpoint.',
+        content: 'We could not send your message. Please try again in a moment.',
         timestamp: new Date(),
         fromType: 'System',
       }])
@@ -165,59 +208,94 @@ export default function UserView() {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-gray-100">
-      <header className="bg-white border-b border-gray-300 px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <User className="text-blue-500" size={28} />
-            <div>
-              <h1 className="text-xl font-semibold">Emergency Response - User Portal</h1>
-              <p className="text-sm text-gray-600">Client ID: {clientId}</p>
+    <div className="h-screen flex flex-col bg-transparent">
+      <header className="px-5 pt-5 md:px-6 md:pt-6">
+        <div className="panel-glass rounded-2xl px-4 py-4 md:px-6">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-center gap-3">
+              <div className="rounded-xl border border-[var(--border-soft)] bg-[var(--brand-soft)] p-2.5 text-[var(--brand)]">
+                <User size={22} />
+              </div>
+              <div>
+                <h1 className="text-xl font-semibold">Survivor Support Portal</h1>
+                <p className="text-sm text-[var(--text-muted)]">
+                  Session reference: {clientId === 'connecting...' ? 'Assigning...' : clientId}
+                </p>
+              </div>
             </div>
-          </div>
-          <div className="flex items-center gap-2 text-gray-700">
-            <div className={`w-2 h-2 rounded-full animate-pulse ${liveBadgeClass}`} />
-            <span className="text-sm">{connectionState}</span>
+
+            <div className="min-w-[18rem]">
+              <div className="status-pill w-fit">
+                <div className={`w-2 h-2 rounded-full animate-pulse ${liveBadgeClass}`} />
+                <span>{connectionPhase}</span>
+              </div>
+              <div className="mt-2 h-1.5 rounded-full bg-[rgba(145,170,203,0.2)]">
+                <div
+                  className="h-full rounded-full bg-[var(--brand)] transition-all duration-500"
+                  style={{ width: `${((connectionStep + 1) / 4) * 100}%` }}
+                />
+              </div>
+            </div>
           </div>
         </div>
       </header>
 
-      <div className="flex-1 flex gap-4 p-6 overflow-hidden">
-        <div className="flex-1 flex flex-col bg-white rounded-lg shadow-sm p-4">
-          <div className="flex items-center gap-2 mb-4">
-            <MapPin className="text-blue-500" size={20} />
-            <h2 className="font-semibold">Live Locations from `/ws`</h2>
-          </div>
-          <div className="flex-1">
-            <MapCanvas locations={locations} />
-          </div>
-          <div className="mt-4 text-sm text-gray-600">Active map points: {locations.length}</div>
-          <div className="mt-1 text-sm text-gray-600">Location: {locationState}</div>
-          <button
-            type="button"
-            onClick={() => setLocationRetryKey((value) => value + 1)}
-            className="mt-2 w-fit px-3 py-1.5 text-xs bg-gray-100 border border-gray-300 rounded hover:bg-gray-200"
-          >
-            Retry location
-          </button>
-        </div>
+      <div className="flex-1 overflow-hidden px-5 pb-5 pt-4 md:px-6 md:pb-6">
+        <div className="h-full grid gap-4 xl:grid-cols-[1fr_22rem]">
+          <section className="panel-glass rounded-2xl p-4 md:p-5 flex flex-col overflow-hidden">
+            <div className="mb-4 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-2">
+                <MapPin className="text-[var(--brand)]" size={18} />
+                <h2 className="section-title font-semibold">Live Support Activity</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLocationRetryKey((value) => value + 1)}
+                className="btn-muted rounded-lg px-3 py-1.5 text-xs font-semibold"
+              >
+                Refresh location
+              </button>
+            </div>
 
-        <div className="w-96 flex flex-col">
-          <ChatPanel
-            messages={messages}
-            currentUserId={clientId}
-            currentUserType="User"
-            onSendMessage={handleSendMessage}
-          />
+            <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-[var(--border-soft)] bg-[rgba(8,16,29,0.75)] p-2">
+              <MapCanvas locations={locations} />
+            </div>
 
-          <div className="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
-            <h3 className="font-semibold text-blue-900 mb-2">Connected Backend Features</h3>
-            <ul className="text-sm text-blue-800 space-y-1">
-              <li>• WebSocket handshake for `client_id`</li>
-              <li>• WebSocket broadcast for `locations` and `regions`</li>
-              <li>• HTTP post to `/message` when you send chat text</li>
-            </ul>
-          </div>
+            <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              <div className="panel-surface rounded-xl px-3 py-2">
+                <div className="soft-label mb-1">Active points</div>
+                <div className="text-sm font-semibold text-[var(--text-strong)]">{locations.length}</div>
+              </div>
+              <div className="panel-surface rounded-xl px-3 py-2">
+                <div className="soft-label mb-1">Location status</div>
+                <div className="text-sm font-semibold text-[var(--text-strong)]">{locationState}</div>
+              </div>
+              <div className="panel-surface rounded-xl px-3 py-2">
+                <div className="soft-label mb-1">Connection</div>
+                <div className="text-sm font-semibold text-[var(--text-strong)]">{connectionState}</div>
+              </div>
+            </div>
+          </section>
+
+          <aside className="min-h-0 flex flex-col gap-4">
+            <div className="min-h-0 flex-1">
+              <ChatPanel
+                messages={messages}
+                currentUserId={clientId}
+                currentUserType="User"
+                onSendMessage={handleSendMessage}
+              />
+            </div>
+
+            <div className="panel-glass rounded-2xl p-4">
+              <div className="soft-label mb-2">What you can do here</div>
+              <ul className="space-y-1.5 text-sm text-[var(--text-primary)]">
+                <li>- Track support movement as it updates</li>
+                <li>- Send messages directly to responder teams</li>
+                <li>- Keep this page open for continuous updates</li>
+              </ul>
+            </div>
+          </aside>
         </div>
       </div>
     </div>

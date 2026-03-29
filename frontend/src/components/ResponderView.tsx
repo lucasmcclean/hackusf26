@@ -28,16 +28,17 @@ function getCurrentLocation(): Promise<LocationTuple | null> {
 }
 
 function getLocationErrorMessage(error: GeolocationPositionError): string {
-  if (error.code === 1) return 'Permission denied'
-  if (error.code === 2) return 'Location unavailable'
-  if (error.code === 3) return 'Location timeout'
-  return 'Location error'
+  if (error.code === 1) return 'Location permission is off'
+  if (error.code === 2) return 'Location is temporarily unavailable'
+  if (error.code === 3) return 'Location request timed out'
+  return 'Location not available'
 }
 
 export default function ResponderView() {
   const [clientId, setClientId] = useState('connecting...')
   const [connectionState, setConnectionState] = useState('Connecting')
-  const [locationState, setLocationState] = useState('Locating')
+  const [connectionPhase, setConnectionPhase] = useState('Preparing your secure session')
+  const [locationState, setLocationState] = useState('Finding your location')
   const [locationRetryKey, setLocationRetryKey] = useState(0)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [queryText, setQueryText] = useState('')
@@ -102,13 +103,47 @@ export default function ResponderView() {
   }, [])
 
   useEffect(() => {
-    if (!sessionController) return
-    if (!navigator.geolocation) {
-      setLocationState('Geolocation unsupported')
+    if (connectionState === 'Connected') {
+      setConnectionPhase('Live updates are ready')
       return
     }
 
-    setLocationState('Locating')
+    if (connectionState === 'Disconnected') {
+      setConnectionPhase('Reconnecting to live updates')
+      return
+    }
+
+    if (connectionState === 'Error') {
+      setConnectionPhase('Unable to connect right now')
+      return
+    }
+
+    const phases = [
+      'Preparing your secure session',
+      'Connecting to support services',
+      'Syncing live updates',
+    ]
+
+    setConnectionPhase(phases[0])
+    let phaseIndex = 0
+    const phaseInterval = window.setInterval(() => {
+      phaseIndex = Math.min(phaseIndex + 1, phases.length - 1)
+      setConnectionPhase(phases[phaseIndex])
+    }, 1150)
+
+    return () => {
+      window.clearInterval(phaseInterval)
+    }
+  }, [connectionState])
+
+  useEffect(() => {
+    if (!sessionController) return
+    if (!navigator.geolocation) {
+      setLocationState('Location sharing is not supported on this device')
+      return
+    }
+
+    setLocationState('Finding your location')
 
     const watchId = navigator.geolocation.watchPosition(
       (position) => {
@@ -128,10 +163,18 @@ export default function ResponderView() {
   }, [sessionController, locationRetryKey])
 
   const liveBadgeClass = useMemo(() => {
-    if (connectionState === 'Connected') return 'bg-green-600'
-    if (connectionState === 'Connecting') return 'bg-amber-500'
-    return 'bg-red-600'
+    if (connectionState === 'Connected') return 'bg-[var(--success)]'
+    if (connectionState === 'Connecting') return 'bg-[var(--warning)]'
+    return 'bg-[var(--danger)]'
   }, [connectionState])
+
+  const connectionStep = useMemo(() => {
+    if (connectionState === 'Connected') return 3
+    if (connectionState === 'Disconnected' || connectionState === 'Error') return 1
+    if (connectionPhase.includes('Connecting')) return 1
+    if (connectionPhase.includes('Syncing')) return 2
+    return 0
+  }, [connectionPhase, connectionState])
 
   const handleSendMessage = async (content: string) => {
     if (!clientId || clientId === 'connecting...') return
@@ -154,7 +197,7 @@ export default function ResponderView() {
         id: `system-${Date.now()}`,
         from: 'system',
         to: clientId,
-        content: 'Failed to send broadcast to backend /message endpoint.',
+        content: 'Broadcast was not sent. Please try again in a moment.',
         timestamp: new Date(),
         fromType: 'System',
       }])
@@ -167,9 +210,9 @@ export default function ResponderView() {
     setIsQuerying(true)
     try {
       const content = await queryMessages(clientId, queryText.trim())
-      setQueryResult(content || 'No content returned from /query')
+      setQueryResult(content || 'No matching updates were found.')
     } catch {
-      setQueryResult('Query request failed against backend /query endpoint.')
+      setQueryResult('Search is currently unavailable. Please try again shortly.')
     } finally {
       setIsQuerying(false)
     }
@@ -186,112 +229,150 @@ export default function ResponderView() {
     : regions[selectedRegionIndex]?.length ?? 0
 
   return (
-    <div className="h-screen flex flex-col bg-gray-100">
-      <header className="bg-white border-b border-gray-300 px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Shield className="text-red-500" size={28} />
-            <div>
-              <h1 className="text-xl font-semibold">Emergency Response - Responder Portal</h1>
-              <p className="text-sm text-gray-600">Client ID: {clientId}</p>
+    <div className="h-screen flex flex-col bg-transparent">
+      <header className="px-5 pt-5 md:px-6 md:pt-6">
+        <div className="panel-glass rounded-2xl px-4 py-4 md:px-6">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-center gap-3">
+              <div className="rounded-xl border border-[var(--border-soft)] bg-[rgba(255,110,110,0.14)] p-2.5 text-[var(--danger)]">
+                <Shield size={22} />
+              </div>
+              <div>
+                <h1 className="text-xl font-semibold">Responder Coordination Portal</h1>
+                <p className="text-sm text-[var(--text-muted)]">
+                  Session reference: {clientId === 'connecting...' ? 'Assigning...' : clientId}
+                </p>
+              </div>
             </div>
-          </div>
-          <div className="flex items-center gap-2 text-gray-700">
-            <div className={`w-2 h-2 rounded-full animate-pulse ${liveBadgeClass}`} />
-            <span className="text-sm">{connectionState}</span>
+
+            <div className="min-w-[18rem]">
+              <div className="status-pill w-fit">
+                <div className={`w-2 h-2 rounded-full animate-pulse ${liveBadgeClass}`} />
+                <span>{connectionPhase}</span>
+              </div>
+              <div className="mt-2 h-1.5 rounded-full bg-[rgba(145,170,203,0.2)]">
+                <div
+                  className="h-full rounded-full bg-[var(--brand)] transition-all duration-500"
+                  style={{ width: `${((connectionStep + 1) / 4) * 100}%` }}
+                />
+              </div>
+            </div>
           </div>
         </div>
       </header>
 
-      <div className="flex-1 flex gap-4 p-6 overflow-hidden">
-        <div className="w-80 flex flex-col gap-4">
-          <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-300">
-            <div className="flex items-center gap-2 mb-3">
-              <Search className="text-red-500" size={20} />
-              <h3 className="font-semibold">Backend Query (`/query`)</h3>
+      <div className="flex-1 overflow-hidden px-5 pb-5 pt-4 md:px-6 md:pb-6">
+        <div className="h-full grid gap-4 xl:grid-cols-[20rem_1fr_22rem]">
+          <aside className="min-h-0 flex flex-col gap-4">
+            <div className="panel-glass rounded-2xl p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Search className="text-[var(--danger)]" size={18} />
+                <h3 className="section-title font-semibold">Message Search</h3>
+              </div>
+              <div className="space-y-2">
+                <input
+                  type="text"
+                  value={queryText}
+                  onChange={(event) => setQueryText(event.target.value)}
+                  onKeyDown={handleKeyPress}
+                  placeholder="Search incident updates..."
+                  className="w-full rounded-lg border border-[var(--border-soft)] bg-[rgba(10,20,35,0.85)] px-3 py-2 text-sm text-[var(--text-strong)] focus:outline-none focus:ring-2 focus:ring-[var(--danger)]"
+                />
+                <button
+                  onClick={handleQuery}
+                  disabled={isQuerying}
+                  className="w-full rounded-lg border border-[rgba(255,130,130,0.55)] bg-[rgba(255,110,110,0.16)] px-4 py-2 text-sm font-semibold text-[#ffd9d9] transition hover:bg-[rgba(255,110,110,0.24)] disabled:opacity-60"
+                >
+                  {isQuerying ? 'Searching...' : 'Search'}
+                </button>
+              </div>
+
+              {queryResult && (
+                <div className="mt-4 border-t border-[var(--border-soft)] pt-4">
+                  <span className="soft-label">Result</span>
+                  <p className="mt-2 rounded-lg border border-[var(--border-soft)] bg-[rgba(8,16,29,0.72)] p-2 text-sm text-[var(--text-primary)]">{queryResult}</p>
+                </div>
+              )}
             </div>
-            <div className="space-y-2">
-              <input
-                type="text"
-                value={queryText}
-                onChange={(event) => setQueryText(event.target.value)}
-                onKeyDown={handleKeyPress}
-                placeholder="Search distress context..."
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 text-sm"
-              />
+
+            <div className="panel-glass rounded-2xl p-4 flex-1 overflow-y-auto">
+              <div className="flex items-center gap-2 mb-3">
+                <FileText className="text-[var(--brand)]" size={18} />
+                <h3 className="section-title font-semibold">Selected Region</h3>
+              </div>
+
+              {selectedRegionIndex === null ? (
+                <p className="text-sm text-[var(--text-muted)]">Select a region on the map to review its coverage details.</p>
+              ) : (
+                <div className="space-y-2">
+                  <div className="soft-label">Region</div>
+                  <div className="text-sm font-semibold text-[var(--text-strong)]">Region {selectedRegionIndex + 1}</div>
+                  <div className="text-xs text-[var(--text-muted)]">Coverage points: {selectedRegionNodeCount}</div>
+                  <div className="rounded-lg border border-[var(--border-soft)] bg-[rgba(8,16,29,0.72)] p-2 text-xs break-all text-[var(--text-primary)]">
+                    Point references: {JSON.stringify(regions[selectedRegionIndex] ?? [])}
+                  </div>
+                </div>
+              )}
+            </div>
+          </aside>
+
+          <section className="panel-glass rounded-2xl p-4 md:p-5 flex flex-col overflow-hidden">
+            <div className="mb-4 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-2">
+                <MessageSquare className="text-[var(--brand)]" size={18} />
+                <h2 className="section-title font-semibold">Operational Overview</h2>
+              </div>
               <button
-                onClick={handleQuery}
-                disabled={isQuerying}
-                className="w-full px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 disabled:opacity-60 flex items-center justify-center gap-2 text-sm"
+                type="button"
+                onClick={() => setLocationRetryKey((value) => value + 1)}
+                className="btn-muted rounded-lg px-3 py-1.5 text-xs font-semibold"
               >
-                <Search size={16} />
-                {isQuerying ? 'Searching...' : 'Search'}
+                Refresh location
               </button>
             </div>
 
-            {queryResult && (
-              <div className="mt-4 border-t border-gray-200 pt-4">
-                <span className="text-sm font-semibold">Result</span>
-                <p className="text-sm text-gray-700 mt-2 bg-gray-50 border border-gray-200 rounded p-2">{queryResult}</p>
-              </div>
-            )}
-          </div>
-
-          <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-300 flex-1 overflow-y-auto">
-            <div className="flex items-center gap-2 mb-3">
-              <FileText className="text-blue-500" size={20} />
-              <h3 className="font-semibold">Region Data from `/ws`</h3>
+            <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-[var(--border-soft)] bg-[rgba(8,16,29,0.75)] p-2">
+              <MapCanvas
+                locations={locations}
+                regions={regions}
+                onRegionClick={(regionIndex) => setSelectedRegionIndex(regionIndex)}
+                highlightedRegion={selectedRegionIndex}
+              />
             </div>
 
-            {selectedRegionIndex === null ? (
-              <p className="text-sm text-gray-500">Click a region to inspect backend indices.</p>
-            ) : (
-              <div className="space-y-2">
-                <div className="text-sm font-semibold text-blue-900">Region {selectedRegionIndex + 1}</div>
-                <div className="text-xs text-gray-600">Node count: {selectedRegionNodeCount}</div>
-                <div className="text-xs bg-blue-50 border border-blue-200 p-2 rounded break-all">
-                  Indices: {JSON.stringify(regions[selectedRegionIndex] ?? [])}
-                </div>
+            <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              <div className="panel-surface rounded-xl px-3 py-2">
+                <div className="soft-label mb-1">Active points</div>
+                <div className="text-sm font-semibold text-[var(--text-strong)]">{locations.length}</div>
               </div>
-            )}
-          </div>
-        </div>
+              <div className="panel-surface rounded-xl px-3 py-2">
+                <div className="soft-label mb-1">Regions</div>
+                <div className="text-sm font-semibold text-[var(--text-strong)]">{regions.length}</div>
+              </div>
+              <div className="panel-surface rounded-xl px-3 py-2">
+                <div className="soft-label mb-1">Location status</div>
+                <div className="text-sm font-semibold text-[var(--text-strong)]">{locationState}</div>
+              </div>
+            </div>
+          </section>
 
-        <div className="flex-1 flex flex-col bg-white rounded-lg shadow-sm p-4">
-          <div className="flex items-center gap-2 mb-4">
-            <MessageSquare className="text-blue-500" size={20} />
-            <h2 className="font-semibold">Operational Map (`locations` + `regions`)</h2>
-          </div>
-          <div className="flex-1">
-            <MapCanvas
-              locations={locations}
-              regions={regions}
-              onRegionClick={(regionIndex) => setSelectedRegionIndex(regionIndex)}
-              highlightedRegion={selectedRegionIndex}
+          <aside className="min-h-0">
+            <ChatPanel
+              messages={messages}
+              currentUserId={clientId}
+              currentUserType="Responder"
+              onSendMessage={handleSendMessage}
+              showBroadcast
             />
-          </div>
-          <div className="mt-4 flex items-center gap-6 text-sm text-gray-600">
-            <span>Locations: {locations.length}</span>
-            <span>Regions: {regions.length}</span>
-            <span>Location: {locationState}</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setLocationRetryKey((value) => value + 1)}
-            className="mt-2 w-fit px-3 py-1.5 text-xs bg-gray-100 border border-gray-300 rounded hover:bg-gray-200"
-          >
-            Retry location
-          </button>
-        </div>
-
-        <div className="w-96">
-          <ChatPanel
-            messages={messages}
-            currentUserId={clientId}
-            currentUserType="Responder"
-            onSendMessage={handleSendMessage}
-            showBroadcast
-          />
+            <div className="panel-glass mt-4 rounded-2xl p-4">
+              <div className="soft-label mb-2">Team actions</div>
+              <ul className="space-y-1.5 text-sm text-[var(--text-primary)]">
+                <li>- Monitor incoming activity in real time</li>
+                <li>- Send broad updates to all Survivors</li>
+                <li>- Use search to revisit prior context</li>
+              </ul>
+            </div>
+          </aside>
         </div>
       </div>
     </div>

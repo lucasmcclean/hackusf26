@@ -1,1 +1,146 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Fraunces:opsz,wght@9..144,500;9..144,700&display=swap');
+
 @import "tailwindcss";
+
+:root {
+  --bg-canvas: #070d14;
+  --bg-layer-1: #0c1624;
+  --bg-layer-2: #111f33;
+  --bg-layer-3: #172a43;
+  --bg-glass: rgba(17, 31, 51, 0.74);
+  --text-strong: #f2f7ff;
+  --text-primary: #d9e7fa;
+  --text-muted: #9eb0c8;
+  --brand: #35b8ff;
+  --brand-soft: rgba(53, 184, 255, 0.16);
+  --success: #2ad49b;
+  --warning: #ffbe4d;
+  --danger: #ff6e6e;
+  --border-soft: rgba(141, 169, 203, 0.25);
+  --shadow-soft: 0 14px 42px rgba(2, 8, 19, 0.42);
+  --shadow-strong: 0 30px 70px rgba(2, 7, 18, 0.62);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: 'Manrope', 'Segoe UI', sans-serif;
+  color: var(--text-strong);
+  background:
+    radial-gradient(circle at 10% 12%, rgba(53, 184, 255, 0.18), transparent 34%),
+    radial-gradient(circle at 82% 92%, rgba(68, 157, 255, 0.2), transparent 32%),
+    linear-gradient(140deg, #070d14 0%, #0b1320 52%, #0d1726 100%);
+}
+
+h1,
+h2,
+h3 {
+  font-family: 'Fraunces', 'Georgia', serif;
+  letter-spacing: 0.01em;
+  color: var(--text-strong);
+}
+
+.app-shell {
+  min-height: 100vh;
+  color: var(--text-primary);
+  background:
+    radial-gradient(circle at 0% 0%, rgba(53, 184, 255, 0.12), transparent 30%),
+    radial-gradient(circle at 100% 100%, rgba(41, 129, 242, 0.1), transparent 35%);
+}
+
+.panel-surface {
+  border: 1px solid var(--border-soft);
+  background: linear-gradient(180deg, rgba(24, 42, 64, 0.9), rgba(16, 30, 48, 0.96));
+  box-shadow: var(--shadow-soft);
+}
+
+.panel-glass {
+  border: 1px solid var(--border-soft);
+  background: var(--bg-glass);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-strong);
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: rgba(9, 21, 34, 0.76);
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0.28rem 0.74rem;
+}
+
+.phase-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+}
+
+.soft-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.hero-title {
+  font-size: clamp(2.1rem, 5.2vw, 4rem);
+  line-height: 1.05;
+}
+
+.section-title {
+  font-size: clamp(1.15rem, 2.5vw, 1.6rem);
+  line-height: 1.15;
+}
+
+.btn-primary {
+  border: 1px solid rgba(98, 193, 255, 0.6);
+  background: linear-gradient(140deg, #2ca7ee 0%, #2094de 60%, #1889d6 100%);
+  color: #eaf6ff;
+  box-shadow: 0 10px 30px rgba(32, 148, 222, 0.32);
+}
+
+.btn-primary:hover {
+  filter: brightness(1.05);
+}
+
+.btn-muted {
+  border: 1px solid var(--border-soft);
+  background: rgba(15, 29, 48, 0.9);
+  color: var(--text-primary);
+}
+
+.tiny-grid {
+  background-image:
+    linear-gradient(rgba(111, 148, 191, 0.12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(111, 148, 191, 0.12) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+.maplibregl-ctrl-group {
+  border: 1px solid var(--border-soft) !important;
+  background: rgba(8, 16, 29, 0.8) !important;
+  box-shadow: var(--shadow-soft) !important;
+}
+
+.maplibregl-ctrl button {
+  color: var(--text-primary) !important;
+}
+
+.maplibregl-ctrl button:hover {
+  background: rgba(53, 184, 255, 0.15) !important;
+}
+
+.maplibregl-canvas {
+  filter: saturate(1.1) contrast(1.05);
+}

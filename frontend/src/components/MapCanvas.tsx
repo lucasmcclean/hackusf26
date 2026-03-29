@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
+import maplibregl, { type GeoJSONSource, type LngLatBoundsLike, type MapGeoJSONFeature } from 'maplibre-gl'
+import 'maplibre-gl/dist/maplibre-gl.css'
 
 export type LocationTuple = [number, number]
 export type RegionGroup = number[]
@@ -10,68 +12,39 @@ interface MapCanvasProps {
   highlightedRegion?: number | null
 }
 
-interface CoordinateTransform {
-  toCanvas: (coords: LocationTuple) => LocationTuple
-  toLogical: (coords: LocationTuple) => LocationTuple
+const TAMPA_BOUNDS: LngLatBoundsLike = [[-82.62, 27.82], [-82.24, 28.19]]
+const TAMPA_CENTER: [number, number] = [-82.4572, 27.9506]
+const TAMPA_BOUNDARY: GeoJSON.Feature<GeoJSON.Polygon> = {
+  type: 'Feature',
+  properties: { name: 'City of Tampa Focus' },
+  geometry: {
+    type: 'Polygon',
+    coordinates: [[
+      [-82.62, 27.82],
+      [-82.24, 27.82],
+      [-82.24, 28.19],
+      [-82.62, 28.19],
+      [-82.62, 27.82],
+    ]],
+  },
 }
 
-function getCoordinateTransform(
-  locations: LocationTuple[],
-  canvasWidth: number,
-  canvasHeight: number,
-): CoordinateTransform {
-  const padding = 40
+const MAPTILER_KEY = (import.meta.env.VITE_MAPTILER_API_KEY as string | undefined) ?? ''
+const MAP_STYLE_URL = (import.meta.env.VITE_MAP_STYLE_URL as string | undefined)
+  ?? (MAPTILER_KEY
+    ? `https://api.maptiler.com/maps/streets-v2-dark/style.json?key=${MAPTILER_KEY}`
+    : 'https://demotiles.maplibre.org/style.json')
 
-  const xValues = locations.map((location) => location[0])
-  const yValues = locations.map((location) => location[1])
-
-  const minX = xValues.length > 0 ? Math.min(...xValues) : 0
-  const maxX = xValues.length > 0 ? Math.max(...xValues) : 100
-  const minY = yValues.length > 0 ? Math.min(...yValues) : 0
-  const maxY = yValues.length > 0 ? Math.max(...yValues) : 100
-
-  const spanX = Math.max(maxX - minX, 0.00001)
-  const spanY = Math.max(maxY - minY, 0.00001)
-
-  const drawableWidth = Math.max(canvasWidth - padding * 2, 1)
-  const drawableHeight = Math.max(canvasHeight - padding * 2, 1)
-
-  const toCanvas = (coords: LocationTuple): LocationTuple => {
-    const normalizedX = (coords[0] - minX) / spanX
-    const normalizedY = (coords[1] - minY) / spanY
-
-    return [
-      padding + normalizedX * drawableWidth,
-      canvasHeight - (padding + normalizedY * drawableHeight),
-    ]
-  }
-
-  const toLogical = (coords: LocationTuple): LocationTuple => {
-    const normalizedX = (coords[0] - padding) / drawableWidth
-    const normalizedY = (canvasHeight - coords[1] - padding) / drawableHeight
-
-    return [
-      minX + normalizedX * spanX,
-      minY + normalizedY * spanY,
-    ]
-  }
-
-  return {
-    toCanvas,
-    toLogical,
-  }
+function toLngLat(location: LocationTuple): [number, number] {
+  return [location[1], location[0]]
 }
 
-function getRegionPolygon(regionIndices: RegionGroup, locations: LocationTuple[]): LocationTuple[] {
-  const points = regionIndices
-    .map((index) => locations[index])
-    .filter((point): point is LocationTuple => Array.isArray(point) && point.length >= 2)
+function isFiniteLocation(location: LocationTuple): boolean {
+  return Number.isFinite(location[0]) && Number.isFinite(location[1])
+}
 
-  if (points.length < 3) {
-    return points
-  }
-
-  const centroid: LocationTuple = [
+function orderPolygonPoints(points: [number, number][]): [number, number][] {
+  const centroid: [number, number] = [
     points.reduce((sum, point) => sum + point[0], 0) / points.length,
     points.reduce((sum, point) => sum + point[1], 0) / points.length,
   ]
@@ -89,165 +62,326 @@ export function MapCanvas({
   onRegionClick,
   highlightedRegion = null,
 }: MapCanvasProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const [hoveredRegion, setHoveredRegion] = useState<number | null>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const mapRef = useRef<maplibregl.Map | null>(null)
+  const hoveredFeatureIdRef = useRef<number | string | null>(null)
+  const regionsRef = useRef<RegionGroup[]>(regions)
+  const onRegionClickRef = useRef<MapCanvasProps['onRegionClick']>(onRegionClick)
 
   useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
+    regionsRef.current = regions
+    onRegionClickRef.current = onRegionClick
+  }, [onRegionClick, regions])
 
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
+  const pointsGeoJson = useMemo<GeoJSON.FeatureCollection<GeoJSON.Point>>(() => {
+    return {
+      type: 'FeatureCollection',
+      features: locations
+        .filter((location) => isFiniteLocation(location))
+        .map((location, index) => ({
+          type: 'Feature',
+          properties: {
+            label: `N${index + 1}`,
+            locationIndex: index,
+          },
+          geometry: {
+            type: 'Point',
+            coordinates: toLngLat(location),
+          },
+        })),
+    }
+  }, [locations])
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
+  const regionsGeoJson = useMemo<GeoJSON.FeatureCollection<GeoJSON.Polygon>>(() => {
+    return {
+      type: 'FeatureCollection',
+      features: regions.flatMap((region, regionIndex) => {
+        const orderedPoints = orderPolygonPoints(
+          region
+            .map((pointIndex) => locations[pointIndex])
+            .filter((location): location is LocationTuple => Array.isArray(location) && isFiniteLocation(location))
+            .map((location) => toLngLat(location)),
+        )
 
-    const { toCanvas } = getCoordinateTransform(locations, canvas.width, canvas.height)
+        if (orderedPoints.length < 3) return []
+        const closedRing = [...orderedPoints, orderedPoints[0]]
 
-    regions.forEach((regionIndices, regionIndex) => {
-      const polygon = getRegionPolygon(regionIndices, locations)
-      if (polygon.length < 3) return
+        return [{
+          type: 'Feature',
+          id: regionIndex,
+          properties: {
+            regionIndex,
+            label: `Region ${regionIndex + 1}`,
+          },
+          geometry: {
+            type: 'Polygon',
+            coordinates: [closedRing],
+          },
+        }]
+      }),
+    }
+  }, [locations, regions])
 
-      ctx.beginPath()
-      const [startX, startY] = toCanvas(polygon[0])
-      ctx.moveTo(startX, startY)
+  const regionLabelsGeoJson = useMemo<GeoJSON.FeatureCollection<GeoJSON.Point>>(() => {
+    return {
+      type: 'FeatureCollection',
+      features: regionsGeoJson.features.map((feature) => {
+        const ring = feature.geometry.coordinates[0]
+        const center: [number, number] = [
+          ring.reduce((sum, point) => sum + point[0], 0) / ring.length,
+          ring.reduce((sum, point) => sum + point[1], 0) / ring.length,
+        ]
 
-      polygon.slice(1).forEach((coord) => {
-        const [x, y] = toCanvas(coord)
-        ctx.lineTo(x, y)
+        return {
+          type: 'Feature',
+          properties: {
+            label: feature.properties?.label,
+          },
+          geometry: {
+            type: 'Point',
+            coordinates: center,
+          },
+        }
+      }),
+    }
+  }, [regionsGeoJson])
+
+  useEffect(() => {
+    if (!containerRef.current) return
+    if (mapRef.current) return
+
+    const map = new maplibregl.Map({
+      container: containerRef.current,
+      style: MAP_STYLE_URL,
+      center: TAMPA_CENTER,
+      zoom: 11.2,
+      minZoom: 10,
+      maxZoom: 18,
+      maxBounds: TAMPA_BOUNDS,
+      attributionControl: false,
+      dragRotate: false,
+      pitchWithRotate: false,
+    })
+
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right')
+
+    map.on('load', () => {
+      map.addSource('tampa-boundary', {
+        type: 'geojson',
+        data: TAMPA_BOUNDARY,
       })
-      ctx.closePath()
 
-      const isHovered = hoveredRegion === regionIndex
-      const isHighlighted = highlightedRegion === regionIndex
+      map.addSource('regions', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      })
 
-      if (isHighlighted) {
-        ctx.fillStyle = 'rgba(59, 130, 246, 0.2)'
-      } else if (isHovered) {
-        ctx.fillStyle = 'rgba(100, 100, 100, 0.15)'
-      } else {
-        ctx.fillStyle = 'rgba(200, 200, 200, 0.1)'
-      }
-      ctx.fill()
+      map.addSource('region-labels', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      })
 
-      ctx.strokeStyle = isHighlighted ? 'rgba(59, 130, 246, 0.6)' : 'rgba(150, 150, 150, 0.4)'
-      ctx.lineWidth = isHighlighted ? 3 : 2
-      ctx.stroke()
+      map.addSource('points', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      })
 
-      const centroid = polygon.reduce(
-        (acc, coord) => [acc[0] + coord[0], acc[1] + coord[1]],
-        [0, 0] as [number, number],
-      ).map((v) => v / polygon.length) as [number, number]
+      map.addLayer({
+        id: 'tampa-focus-fill',
+        type: 'fill',
+        source: 'tampa-boundary',
+        paint: {
+          'fill-color': 'rgba(32, 148, 222, 0.04)',
+        },
+      })
 
-      const [labelX, labelY] = toCanvas(centroid)
-      ctx.fillStyle = '#666'
-      ctx.font = '12px sans-serif'
-      ctx.textAlign = 'center'
-      ctx.fillText(`Region ${regionIndex + 1}`, labelX, labelY)
+      map.addLayer({
+        id: 'regions-fill',
+        type: 'fill',
+        source: 'regions',
+        paint: {
+          'fill-color': [
+            'case',
+            ['boolean', ['feature-state', 'hover'], false],
+            'rgba(79, 194, 255, 0.34)',
+            'rgba(53, 184, 255, 0.18)',
+          ],
+        },
+      })
+
+      map.addLayer({
+        id: 'regions-outline',
+        type: 'line',
+        source: 'regions',
+        paint: {
+          'line-color': 'rgba(110, 207, 255, 0.55)',
+          'line-width': 1.8,
+        },
+      })
+
+      map.addLayer({
+        id: 'regions-highlight-fill',
+        type: 'fill',
+        source: 'regions',
+        filter: ['==', ['get', 'regionIndex'], -1],
+        paint: {
+          'fill-color': 'rgba(42, 212, 155, 0.32)',
+        },
+      })
+
+      map.addLayer({
+        id: 'regions-highlight-outline',
+        type: 'line',
+        source: 'regions',
+        filter: ['==', ['get', 'regionIndex'], -1],
+        paint: {
+          'line-color': 'rgba(42, 212, 155, 0.95)',
+          'line-width': 2.8,
+        },
+      })
+
+      map.addLayer({
+        id: 'region-labels',
+        type: 'symbol',
+        source: 'region-labels',
+        layout: {
+          'text-field': ['coalesce', ['get', 'label'], ''],
+          'text-size': 11,
+          'text-font': ['Noto Sans Regular'],
+        },
+        paint: {
+          'text-color': 'rgba(225, 241, 255, 0.95)',
+          'text-halo-color': 'rgba(8, 16, 29, 0.92)',
+          'text-halo-width': 1.3,
+        },
+      })
+
+      map.addLayer({
+        id: 'points-circles',
+        type: 'circle',
+        source: 'points',
+        paint: {
+          'circle-radius': 7,
+          'circle-color': 'rgba(255, 110, 110, 0.9)',
+          'circle-stroke-width': 2,
+          'circle-stroke-color': 'rgba(255, 233, 233, 0.85)',
+        },
+      })
+
+      map.addLayer({
+        id: 'points-labels',
+        type: 'symbol',
+        source: 'points',
+        layout: {
+          'text-field': ['get', 'label'],
+          'text-size': 10,
+          'text-font': ['Noto Sans Bold'],
+          'text-offset': [0, -1.5],
+        },
+        paint: {
+          'text-color': 'rgba(235, 247, 255, 0.96)',
+          'text-halo-color': 'rgba(8, 16, 29, 0.92)',
+          'text-halo-width': 1.3,
+        },
+      })
+
+      map.addLayer({
+        id: 'tampa-focus-outline',
+        type: 'line',
+        source: 'tampa-boundary',
+        paint: {
+          'line-color': 'rgba(125, 214, 255, 0.7)',
+          'line-width': 2.4,
+        },
+      })
+
+      map.on('mouseenter', 'regions-fill', () => {
+        map.getCanvas().style.cursor = 'pointer'
+      })
+
+      map.on('mousemove', 'regions-fill', (event) => {
+        if (event.features?.length !== 1) return
+        const feature = event.features[0]
+        if (feature.id === undefined || feature.id === null) return
+
+        if (hoveredFeatureIdRef.current !== null && hoveredFeatureIdRef.current !== feature.id) {
+          map.setFeatureState({ source: 'regions', id: hoveredFeatureIdRef.current }, { hover: false })
+        }
+
+        hoveredFeatureIdRef.current = feature.id
+        map.setFeatureState({ source: 'regions', id: feature.id }, { hover: true })
+      })
+
+      map.on('mouseleave', 'regions-fill', () => {
+        map.getCanvas().style.cursor = ''
+        if (hoveredFeatureIdRef.current !== null) {
+          map.setFeatureState({ source: 'regions', id: hoveredFeatureIdRef.current }, { hover: false })
+          hoveredFeatureIdRef.current = null
+        }
+      })
+
+      map.on('click', 'regions-fill', (event) => {
+        const clickHandler = onRegionClickRef.current
+        if (!clickHandler) return
+        const feature = event.features?.[0] as MapGeoJSONFeature | undefined
+        if (!feature) return
+        const regionIndexValue = feature.properties?.regionIndex
+        const regionIndex = typeof regionIndexValue === 'number'
+          ? regionIndexValue
+          : Number(regionIndexValue)
+        if (!Number.isInteger(regionIndex) || regionIndex < 0) return
+
+        const clickedRegion = regionsRef.current[regionIndex]
+        if (!clickedRegion) return
+        clickHandler(regionIndex, clickedRegion)
+      })
     })
 
-    locations.forEach((location, locationIndex) => {
-      const [x, y] = toCanvas(location)
+    mapRef.current = map
 
-      ctx.beginPath()
-      ctx.arc(x, y, 7, 0, 2 * Math.PI)
-      ctx.fillStyle = '#ef4444'
-      ctx.fill()
-      ctx.strokeStyle = '#991b1b'
-      ctx.lineWidth = 2
-      ctx.stroke()
-
-      ctx.fillStyle = '#111'
-      ctx.font = '10px sans-serif'
-      ctx.textAlign = 'center'
-      ctx.fillText(`N${locationIndex + 1}`, x, y - 12)
-    })
-  }, [locations, regions, hoveredRegion, highlightedRegion])
-
-  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!onRegionClick || regions.length === 0) return
-
-    const canvas = canvasRef.current
-    if (!canvas) return
-
-    const rect = canvas.getBoundingClientRect()
-    const x = e.clientX - rect.left
-    const y = e.clientY - rect.top
-
-    const { toLogical } = getCoordinateTransform(locations, canvas.width, canvas.height)
-    const [logicalX, logicalY] = toLogical([x, y])
-
-    for (let regionIndex = 0; regionIndex < regions.length; regionIndex += 1) {
-      const region = regions[regionIndex]
-      const polygon = getRegionPolygon(region, locations)
-      if (polygon.length < 3) continue
-
-      let inside = false
-      for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-        const xi = polygon[i][0]
-        const yi = polygon[i][1]
-        const xj = polygon[j][0]
-        const yj = polygon[j][1]
-
-        const intersect = ((yi > logicalY) !== (yj > logicalY))
-          && (logicalX < (xj - xi) * (logicalY - yi) / (yj - yi) + xi)
-        if (intersect) inside = !inside
-      }
-
-      if (inside) {
-        onRegionClick(regionIndex, region)
-        return
-      }
+    return () => {
+      map.remove()
+      mapRef.current = null
+      hoveredFeatureIdRef.current = null
     }
-  }
+  }, [])
 
-  const handleCanvasHover = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (regions.length === 0) return
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    if (!map.isStyleLoaded()) return
 
-    const canvas = canvasRef.current
-    if (!canvas) return
+    const source = map.getSource('points') as GeoJSONSource | undefined
+    source?.setData(pointsGeoJson)
+  }, [pointsGeoJson])
 
-    const rect = canvas.getBoundingClientRect()
-    const x = e.clientX - rect.left
-    const y = e.clientY - rect.top
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    if (!map.isStyleLoaded()) return
 
-    const { toLogical } = getCoordinateTransform(locations, canvas.width, canvas.height)
-    const [logicalX, logicalY] = toLogical([x, y])
+    const regionsSource = map.getSource('regions') as GeoJSONSource | undefined
+    regionsSource?.setData(regionsGeoJson)
 
-    for (let regionIndex = 0; regionIndex < regions.length; regionIndex += 1) {
-      const region = regions[regionIndex]
-      const polygon = getRegionPolygon(region, locations)
-      if (polygon.length < 3) continue
+    const labelsSource = map.getSource('region-labels') as GeoJSONSource | undefined
+    labelsSource?.setData(regionLabelsGeoJson)
 
-      let inside = false
-      for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-        const xi = polygon[i][0]
-        const yi = polygon[i][1]
-        const xj = polygon[j][0]
-        const yj = polygon[j][1]
-
-        const intersect = ((yi > logicalY) !== (yj > logicalY))
-          && (logicalX < (xj - xi) * (logicalY - yi) / (yj - yi) + xi)
-        if (intersect) inside = !inside
-      }
-
-      if (inside) {
-        setHoveredRegion(regionIndex)
-        return
-      }
-    }
-
-    setHoveredRegion(null)
-  }
+    const highlightFilter = ['==', ['get', 'regionIndex'], highlightedRegion ?? -1] as maplibregl.FilterSpecification
+    map.setFilter('regions-highlight-fill', highlightFilter)
+    map.setFilter('regions-highlight-outline', highlightFilter)
+  }, [highlightedRegion, regionLabelsGeoJson, regionsGeoJson])
 
   return (
-    <canvas
-      ref={canvasRef}
-      width={800}
-      height={600}
-      className="w-full h-full border border-gray-300 rounded-lg bg-gray-50 cursor-pointer"
-      onClick={handleCanvasClick}
-      onMouseMove={handleCanvasHover}
-      onMouseLeave={() => setHoveredRegion(null)}
-    />
+    <div className="relative h-full w-full overflow-hidden rounded-xl border border-[var(--border-soft)]">
+      <div ref={containerRef} className="h-full w-full" />
+      {!MAPTILER_KEY && !import.meta.env.VITE_MAP_STYLE_URL && (
+        <div className="pointer-events-none absolute left-3 top-3 rounded-md border border-[rgba(255,190,77,0.42)] bg-[rgba(255,190,77,0.14)] px-2 py-1 text-xs text-[#ffe0af]">
+          Add `VITE_MAPTILER_API_KEY` for Tampa production map style.
+        </div>
+      )}
+      <div className="pointer-events-none absolute bottom-3 left-3 rounded-md border border-[var(--border-soft)] bg-[rgba(8,16,29,0.72)] px-2 py-1 text-[10px] text-[var(--text-muted)]">
+        Tampa focus region enabled
+      </div>
+    </div>
   )
 }

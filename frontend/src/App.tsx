@@ -2,7 +2,7 @@ import { Outlet } from 'react-router'
 
 function App() {
   return (
-    <main className="min-h-screen bg-slate-50 text-slate-900">
+    <main className="app-shell">
       <Outlet />
     </main>
   )
