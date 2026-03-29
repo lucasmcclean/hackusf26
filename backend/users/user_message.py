@@ -87,6 +87,71 @@ async def add_user_message(
     doc = Document(text=content, metadata=metadata)
     user_messages_index.insert(doc)
 
+
+def add_simulated_user_message(
+    content: str,
+    user_id: str,
+    priority: int,
+    lat: float = None,
+    lon: float = None,
+    time: datetime = None,
+    extra_metadata: dict = None,
+):
+    time = time or datetime.utcnow()
+
+    location_geom = WKTElement(f"POINT({lon} {lat})", srid=4326) if lat is not None and lon is not None else None
+
+    with engine.begin() as conn:
+        if location_geom:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO user_messages (user_id, content, time, location_geom)
+                    VALUES (
+                        :user_id,
+                        :content,
+                        :time,
+                        ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography
+                    )
+                    """
+                ),
+                {
+                    "user_id": user_id,
+                    "content": content,
+                    "time": time,
+                    "lat": lat,
+                    "lon": lon,
+                }
+            )
+        else:
+            conn.execute(
+                text(
+                    "INSERT INTO user_messages (user_id, content, time) "
+                    "VALUES (:user_id, :content, :time)"
+                ),
+                {"user_id": user_id, "content": content, "time": time}
+            )
+
+        conn.execute(
+            text(
+                """
+                UPDATE users
+                SET priority = :priority
+                WHERE id = :id
+                """
+            ),
+            {"id": user_id, "priority": int(priority)}
+        )
+
+    metadata = {"user_id": user_id, "time": time.isoformat(), "simulated": True}
+    if lat is not None and lon is not None:
+        metadata.update({"lat": lat, "lon": lon})
+    if extra_metadata:
+        metadata.update(extra_metadata)
+
+    doc = Document(text=content, metadata=metadata)
+    user_messages_index.insert(doc)
+
 async def query_user_messages(
     query_text: str,
     top_k: int = 5,

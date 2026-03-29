@@ -9,8 +9,15 @@ const RECONNECT_MAX_DELAY_MS = 15000
 const RECONNECT_JITTER_MS = 250
 
 export type Role = 'user' | 'responder'
-export type LocationTuple = [number, number, number?]
-export type RegionGroup = number[]
+export type LocationTuple = [number, number, number?, string?]
+export type RegionPointTuple = [number, number, number]
+
+export interface RegionPolygon {
+  points: Array<[number, number]>
+  priority: number
+  relativePriority: number
+  pointCount: number
+}
 
 interface ClientIdMessage {
   client_id: string
@@ -19,6 +26,7 @@ interface ClientIdMessage {
 interface BroadcastMessage {
   locations?: unknown
   regions?: unknown
+  region_debug?: unknown
 }
 
 interface ResponderMessage {
@@ -27,12 +35,36 @@ interface ResponderMessage {
 
 export interface BackendData {
   locations: LocationTuple[]
-  regions: RegionGroup[]
+  regions: RegionPolygon[]
+  regionDebug?: {
+    usersTotal: number
+    usersValidForRegions: number
+    respondersTotal: number
+    respondersValidForMap: number
+    regionsCount: number
+    activeConnections: number
+  }
 }
 
 export interface SessionController {
   close: () => void
   sendLocation: (location: LocationTuple) => void
+}
+
+export interface RegionReport {
+  regionId: number
+  matchedUserIds: string[]
+  matchedUserCount: number
+  report: string
+}
+
+export interface UserMessageRecord {
+  id: string
+  userId: string
+  content: string
+  time: string | null
+  latitude: number | null
+  longitude: number | null
 }
 
 interface ConnectOptions {
@@ -76,11 +108,11 @@ function isLocationTuple(value: unknown): value is LocationTuple {
     if (!Number.isFinite(role)) return false
   }
 
-  return true
-}
+  if (value.length >= 4 && value[3] !== undefined && value[3] !== null) {
+    if (typeof value[3] !== 'string') return false
+  }
 
-function isRegionGroup(value: unknown): value is RegionGroup {
-  return Array.isArray(value) && value.every((item) => Number.isInteger(item))
+  return true
 }
 
 function isBroadcastMessage(value: unknown): value is BroadcastMessage {
@@ -97,8 +129,42 @@ function normalizeLocationTuple(value: unknown): LocationTuple | null {
   const role = value.length >= 3 && value[2] !== undefined && value[2] !== null
     ? Number(value[2])
     : undefined
+  const entityId = value.length >= 4 && typeof value[3] === 'string'
+    ? value[3]
+    : undefined
 
-  return role === undefined ? [lat, lon] : [lat, lon, role]
+  if (role === undefined && entityId === undefined) return [lat, lon]
+  if (entityId === undefined) return [lat, lon, role]
+  if (role === undefined) return [lat, lon, 0, entityId]
+  return [lat, lon, role, entityId]
+}
+
+function normalizeRegionPointTuple(value: unknown): RegionPointTuple | null {
+  if (!Array.isArray(value) || value.length < 3) return null
+  const lat = Number(value[0])
+  const lon = Number(value[1])
+  const priority = Number(value[2])
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(priority)) return null
+  return [lat, lon, priority]
+}
+
+function normalizeRegion(rawRegion: unknown): Omit<RegionPolygon, 'relativePriority'> | null {
+  if (!Array.isArray(rawRegion)) return null
+
+  const tuples = rawRegion
+    .map((entry) => normalizeRegionPointTuple(entry))
+    .filter((entry): entry is RegionPointTuple => entry !== null)
+
+  if (tuples.length === 0) return null
+
+  const points = tuples.map(([lat, lon]) => [lat, lon] as [number, number])
+  const priority = tuples.reduce((sum, tuple) => sum + tuple[2], 0) / tuples.length
+
+  return {
+    points,
+    priority,
+    pointCount: tuples.length,
+  }
 }
 
 function normalizeBroadcastData(value: BroadcastMessage): BackendData | null {
@@ -111,13 +177,37 @@ function normalizeBroadcastData(value: BroadcastMessage): BackendData | null {
 
   const locations = normalizedLocations as LocationTuple[]
 
-  const regions = Array.isArray(value.regions) && value.regions.every((entry) => isRegionGroup(entry))
+  const regionBases = Array.isArray(value.regions)
     ? value.regions
+      .map((entry) => normalizeRegion(entry))
+      .filter((entry): entry is Omit<RegionPolygon, 'relativePriority'> => entry !== null)
     : []
+
+  const averagePriority = regionBases.length > 0
+    ? regionBases.reduce((sum, region) => sum + region.priority, 0) / regionBases.length
+    : 0
+
+  const regions: RegionPolygon[] = regionBases.map((region) => ({
+    ...region,
+    relativePriority: region.priority - averagePriority,
+  }))
+
+  const regionDebugRaw = value.region_debug
+  const regionDebug = typeof regionDebugRaw === 'object' && regionDebugRaw !== null
+    ? {
+      usersTotal: Number((regionDebugRaw as { users_total?: unknown }).users_total ?? 0),
+      usersValidForRegions: Number((regionDebugRaw as { users_valid_for_regions?: unknown }).users_valid_for_regions ?? 0),
+      respondersTotal: Number((regionDebugRaw as { responders_total?: unknown }).responders_total ?? 0),
+      respondersValidForMap: Number((regionDebugRaw as { responders_valid_for_map?: unknown }).responders_valid_for_map ?? 0),
+      regionsCount: Number((regionDebugRaw as { regions_count?: unknown }).regions_count ?? 0),
+      activeConnections: Number((regionDebugRaw as { active_connections?: unknown }).active_connections ?? 0),
+    }
+    : undefined
 
   return {
     locations,
     regions,
+    regionDebug,
   }
 }
 
@@ -242,6 +332,71 @@ export async function queryMessages(clientId: string, content: string): Promise<
   return typeof json.content === 'string' ? json.content : ''
 }
 
+export async function requestRegionReport(regionId: number, prompt?: string): Promise<RegionReport> {
+  const queryParams = new URLSearchParams()
+  queryParams.set('region_id', String(regionId))
+  if (prompt && prompt.trim()) {
+    queryParams.set('prompt', prompt.trim())
+  }
+
+  const response = await fetch(`${API_BASE_URL}/report?${queryParams.toString()}`, {
+    method: 'POST',
+  })
+
+  if (!response.ok) {
+    throw new Error(`Report request failed (${response.status})`)
+  }
+
+  const json = await response.json() as {
+    region_id?: unknown
+    matched_user_ids?: unknown
+    matched_user_count?: unknown
+    report?: unknown
+  }
+
+  return {
+    regionId: Number(json.region_id ?? regionId),
+    matchedUserIds: Array.isArray(json.matched_user_ids)
+      ? json.matched_user_ids.map((id) => String(id))
+      : [],
+    matchedUserCount: Number(json.matched_user_count ?? 0),
+    report: typeof json.report === 'string' ? json.report : '',
+  }
+}
+
+export async function fetchUserMessages(userId: string): Promise<UserMessageRecord[]> {
+  const queryParams = new URLSearchParams()
+  queryParams.set('user_id', userId)
+  const response = await fetch(`${API_BASE_URL}/user_messages?${queryParams.toString()}`, {
+    method: 'GET',
+  })
+
+  if (!response.ok) {
+    throw new Error(`User messages request failed (${response.status})`)
+  }
+
+  const json = await response.json() as {
+    messages?: Array<{
+      id?: unknown
+      user_id?: unknown
+      content?: unknown
+      time?: unknown
+      latitude?: unknown
+      longitude?: unknown
+    }>
+  }
+
+  const messages = Array.isArray(json.messages) ? json.messages : []
+  return messages.map((message) => ({
+    id: String(message.id ?? ''),
+    userId: String(message.user_id ?? userId),
+    content: typeof message.content === 'string' ? message.content : '',
+    time: typeof message.time === 'string' ? message.time : null,
+    latitude: typeof message.latitude === 'number' ? message.latitude : null,
+    longitude: typeof message.longitude === 'number' ? message.longitude : null,
+  }))
+}
+
 export async function connectRealtimeSession(options: ConnectOptions): Promise<SessionController> {
   let currentLocation = options.location ?? null
   let activeSocket: WebSocket | null = null
@@ -308,11 +463,9 @@ export async function connectRealtimeSession(options: ConnectOptions): Promise<S
 
       activeSocket = socket
       reconnectAttempts = 0
-      options.onClientId(clientId)
 
-      void switchRole(clientId, options.role).catch(() => {
-        options.onError?.('Role sync request failed, realtime stream is still active')
-      })
+      await switchRole(clientId, options.role)
+      options.onClientId(clientId)
 
       if (currentLocation && socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify(currentLocation))

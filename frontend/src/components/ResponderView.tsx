@@ -1,14 +1,19 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import { Shield, Search, FileText, MessageSquare } from 'lucide-react'
 import { ChatPanel, type ChatMessage } from './ChatPanel'
-import { MapCanvas } from './MapCanvas'
+import { MapCanvas, type MapPointSelection } from './MapCanvas'
+import { MarkdownContent } from './MarkdownContent'
 import {
   connectRealtimeSession,
+  fetchUserMessages,
   queryMessages,
+  requestRegionReport,
   sendMessage,
   type LocationTuple,
-  type RegionGroup,
+  type RegionReport,
+  type RegionPolygon,
   type SessionController,
+  type UserMessageRecord,
 } from '../services/api'
 
 function getCurrentLocation(): Promise<LocationTuple | null> {
@@ -44,9 +49,18 @@ export default function ResponderView() {
   const [queryText, setQueryText] = useState('')
   const [queryResult, setQueryResult] = useState('')
   const [isQuerying, setIsQuerying] = useState(false)
-  const [locations, setLocations] = useState<LocationTuple[]>([])
-  const [regions, setRegions] = useState<RegionGroup[]>([])
   const [selectedRegionIndex, setSelectedRegionIndex] = useState<number | null>(null)
+  const [regionReport, setRegionReport] = useState<RegionReport | null>(null)
+  const [isLoadingRegionReport, setIsLoadingRegionReport] = useState(false)
+  const [regionReportError, setRegionReportError] = useState('')
+  const [isRegionReportModalOpen, setIsRegionReportModalOpen] = useState(false)
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null)
+  const [isUserMessagesModalOpen, setIsUserMessagesModalOpen] = useState(false)
+  const [isLoadingUserMessages, setIsLoadingUserMessages] = useState(false)
+  const [userMessagesError, setUserMessagesError] = useState('')
+  const [selectedUserMessages, setSelectedUserMessages] = useState<UserMessageRecord[]>([])
+  const [locations, setLocations] = useState<LocationTuple[]>([])
+  const [regions, setRegions] = useState<RegionPolygon[]>([])
   const [sessionController, setSessionController] = useState<SessionController | null>(null)
 
   useEffect(() => {
@@ -224,9 +238,60 @@ export default function ResponderView() {
     }
   }
 
-  const selectedRegionNodeCount = selectedRegionIndex === null
-    ? 0
-    : regions[selectedRegionIndex]?.length ?? 0
+  const handleRegionClick = async (regionIndex: number) => {
+    setSelectedRegionIndex(regionIndex)
+    setRegionReport(null)
+    setRegionReportError('')
+    setIsRegionReportModalOpen(false)
+    setIsLoadingRegionReport(true)
+
+    try {
+      const report = await requestRegionReport(regionIndex)
+      setRegionReport(report)
+    } catch {
+      setRegionReportError('Region report is currently unavailable. Please try again shortly.')
+    } finally {
+      setIsLoadingRegionReport(false)
+    }
+  }
+
+  const handlePointClick = async (selection: MapPointSelection) => {
+    if (selection.role !== 0) return
+    if (!selection.entityId) {
+      setUserMessagesError('No user id available for this node.')
+      setSelectedUserMessages([])
+      setSelectedUserId(null)
+      setIsUserMessagesModalOpen(true)
+      return
+    }
+
+    setSelectedUserId(selection.entityId)
+    setUserMessagesError('')
+    setSelectedUserMessages([])
+    setIsLoadingUserMessages(true)
+    setIsUserMessagesModalOpen(true)
+
+    try {
+      const records = await fetchUserMessages(selection.entityId)
+      setSelectedUserMessages(records)
+    } catch {
+      setUserMessagesError('Unable to load user messages right now. Please try again shortly.')
+    } finally {
+      setIsLoadingUserMessages(false)
+    }
+  }
+
+  useEffect(() => {
+    const handleEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setIsRegionReportModalOpen(false)
+      setIsUserMessagesModalOpen(false)
+    }
+
+    if (!isRegionReportModalOpen && !isUserMessagesModalOpen) return
+    window.addEventListener('keydown', handleEscape)
+    return () => window.removeEventListener('keydown', handleEscape)
+  }, [isRegionReportModalOpen, isUserMessagesModalOpen])
 
   return (
     <div className="h-screen flex flex-col bg-transparent">
@@ -290,30 +355,55 @@ export default function ResponderView() {
               {queryResult && (
                 <div className="mt-4 border-t border-[var(--border-soft)] pt-4">
                   <span className="soft-label">Result</span>
-                  <p className="mt-2 rounded-lg border border-[var(--border-soft)] bg-[rgba(8,16,29,0.72)] p-2 text-sm text-[var(--text-primary)]">{queryResult}</p>
-                </div>
-              )}
-            </div>
-
-            <div className="panel-glass rounded-2xl p-4 flex-1 overflow-y-auto">
-              <div className="flex items-center gap-2 mb-3">
-                <FileText className="text-[var(--brand)]" size={18} />
-                <h3 className="section-title font-semibold">Selected Region</h3>
-              </div>
-
-              {selectedRegionIndex === null ? (
-                <p className="text-sm text-[var(--text-muted)]">Select a region on the map to review its coverage details.</p>
-              ) : (
-                <div className="space-y-2">
-                  <div className="soft-label">Region</div>
-                  <div className="text-sm font-semibold text-[var(--text-strong)]">Region {selectedRegionIndex + 1}</div>
-                  <div className="text-xs text-[var(--text-muted)]">Coverage points: {selectedRegionNodeCount}</div>
-                  <div className="rounded-lg border border-[var(--border-soft)] bg-[rgba(8,16,29,0.72)] p-2 text-xs break-all text-[var(--text-primary)]">
-                    Point references: {JSON.stringify(regions[selectedRegionIndex] ?? [])}
+                  <div className="mt-2 rounded-lg border border-[var(--border-soft)] bg-[rgba(8,16,29,0.72)] p-3">
+                    <MarkdownContent content={queryResult} />
                   </div>
                 </div>
               )}
             </div>
+
+            <div className="panel-glass rounded-2xl p-4 min-h-0 flex flex-col">
+              <div className="flex items-center gap-2 mb-3">
+                <FileText className="text-[var(--brand)]" size={18} />
+                <h3 className="section-title font-semibold">Region Report</h3>
+              </div>
+
+              {selectedRegionIndex === null ? (
+                <p className="text-sm text-[var(--text-muted)]">Shift+click or right-click any region on the map to generate a report.</p>
+              ) : (
+                <div className="space-y-2">
+                  <div className="soft-label">Selected region</div>
+                  <p className="text-sm font-semibold text-[var(--text-strong)]">Region {selectedRegionIndex + 1}</p>
+
+                  {isLoadingRegionReport && (
+                    <p className="text-sm text-[var(--text-muted)]">Generating region report...</p>
+                  )}
+
+                  {!isLoadingRegionReport && regionReportError && (
+                    <p className="text-sm text-[var(--danger)]">{regionReportError}</p>
+                  )}
+
+                  {!isLoadingRegionReport && regionReport && (
+                    <>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs text-[var(--text-muted)]">Matched users: {regionReport.matchedUserCount}</p>
+                        <button
+                          type="button"
+                          onClick={() => setIsRegionReportModalOpen(true)}
+                          className="btn-muted rounded-md px-2.5 py-1 text-[11px] font-semibold"
+                        >
+                          Open full report
+                        </button>
+                      </div>
+                      <div className="max-h-56 md:max-h-72 overflow-y-auto rounded-lg border border-[var(--border-soft)] bg-[rgba(8,16,29,0.72)] p-3">
+                        <MarkdownContent content={regionReport.report || 'No report text returned.'} />
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+
           </aside>
 
           <section className="panel-glass rounded-2xl p-4 md:p-5 flex flex-col overflow-hidden">
@@ -335,8 +425,9 @@ export default function ResponderView() {
               <MapCanvas
                 locations={locations}
                 regions={regions}
-                onRegionClick={(regionIndex) => setSelectedRegionIndex(regionIndex)}
-                highlightedRegion={selectedRegionIndex}
+                onRegionClick={handleRegionClick}
+                onPointClick={handlePointClick}
+                currentClientId={clientId}
               />
             </div>
 
@@ -344,10 +435,6 @@ export default function ResponderView() {
               <div className="panel-surface rounded-xl px-3 py-2">
                 <div className="soft-label mb-1">Active points</div>
                 <div className="text-sm font-semibold text-[var(--text-strong)]">{locations.length}</div>
-              </div>
-              <div className="panel-surface rounded-xl px-3 py-2">
-                <div className="soft-label mb-1">Regions</div>
-                <div className="text-sm font-semibold text-[var(--text-strong)]">{regions.length}</div>
               </div>
               <div className="panel-surface rounded-xl px-3 py-2">
                 <div className="soft-label mb-1">Location status</div>
@@ -375,6 +462,87 @@ export default function ResponderView() {
           </aside>
         </div>
       </div>
+
+      {isRegionReportModalOpen && regionReport && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(3,8,15,0.75)] p-4"
+          onClick={() => setIsRegionReportModalOpen(false)}
+        >
+          <div className="panel-glass w-full max-w-4xl max-h-[88vh] rounded-2xl p-5 flex flex-col" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <div>
+                <div className="soft-label">Region report</div>
+                <h3 className="text-lg font-semibold text-[var(--text-strong)]">Region {regionReport.regionId + 1}</h3>
+                <p className="text-xs text-[var(--text-muted)] mt-1">Matched users: {regionReport.matchedUserCount}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsRegionReportModalOpen(false)}
+                className="btn-muted rounded-md px-3 py-1.5 text-xs font-semibold"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-[var(--border-soft)] bg-[rgba(8,16,29,0.72)] p-4">
+              <MarkdownContent content={regionReport.report || 'No report text returned.'} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isUserMessagesModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(3,8,15,0.75)] p-4"
+          onClick={() => setIsUserMessagesModalOpen(false)}
+        >
+          <div className="panel-glass w-full max-w-3xl max-h-[85vh] rounded-2xl p-5 flex flex-col" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <div>
+                <div className="soft-label">User messages</div>
+                <h3 className="text-lg font-semibold text-[var(--text-strong)]">
+                  {selectedUserId ? `User ${selectedUserId}` : 'User details'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsUserMessagesModalOpen(false)}
+                className="btn-muted rounded-md px-3 py-1.5 text-xs font-semibold"
+              >
+                Close
+              </button>
+            </div>
+
+            {isLoadingUserMessages && (
+              <p className="text-sm text-[var(--text-muted)]">Loading user messages...</p>
+            )}
+
+            {!isLoadingUserMessages && userMessagesError && (
+              <p className="text-sm text-[var(--danger)]">{userMessagesError}</p>
+            )}
+
+            {!isLoadingUserMessages && !userMessagesError && selectedUserMessages.length === 0 && (
+              <p className="text-sm text-[var(--text-muted)]">No messages were found for this user yet.</p>
+            )}
+
+            {!isLoadingUserMessages && !userMessagesError && selectedUserMessages.length > 0 && (
+              <div className="min-h-0 flex-1 overflow-y-auto space-y-2">
+                {selectedUserMessages.map((message, index) => (
+                  <div
+                    key={message.id || `${message.userId}-${message.time ?? index}`}
+                    className="rounded-lg border border-[var(--border-soft)] bg-[rgba(8,16,29,0.72)] p-3"
+                  >
+                    <div className="mb-2 text-xs text-[var(--text-muted)]">
+                      {message.time ? new Date(message.time).toLocaleString() : 'Unknown timestamp'}
+                    </div>
+                    <MarkdownContent content={message.content || '(empty message)'} />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

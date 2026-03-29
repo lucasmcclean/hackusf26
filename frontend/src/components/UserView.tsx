@@ -6,6 +6,7 @@ import {
   connectRealtimeSession,
   sendMessage,
   type LocationTuple,
+  type RegionPolygon,
   type SessionController,
 } from '../services/api'
 
@@ -39,13 +40,9 @@ export default function UserView() {
   const [locationState, setLocationState] = useState('Finding your location')
   const [locationRetryKey, setLocationRetryKey] = useState(0)
   const [locations, setLocations] = useState<LocationTuple[]>([])
+  const [regions, setRegions] = useState<RegionPolygon[]>([])
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [sessionController, setSessionController] = useState<SessionController | null>(null)
-
-  useEffect(() => {
-    console.log("Locations")
-    console.log(locations)
-  }, [locations])
 
   useEffect(() => {
     let sessionController: SessionController | null = null
@@ -67,10 +64,9 @@ export default function UserView() {
             setConnectionState('Connected')
           },
           onData: (data) => {
-            console.log("entering")
-            console.log(data)
             if (!mounted) return
             setLocations(data.locations)
+            setRegions(data.regions)
           },
           onResponderMessage: (content) => {
             if (!mounted) return
@@ -265,7 +261,7 @@ export default function UserView() {
             </div>
 
             <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-[var(--border-soft)] bg-[rgba(8,16,29,0.75)] p-2">
-              <MapCanvas locations={locations} />
+              <MapCanvas locations={locations} regions={regions} currentClientId={clientId} />
             </div>
 
             <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
