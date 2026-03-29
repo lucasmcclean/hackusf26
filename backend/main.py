@@ -99,7 +99,7 @@ async def broadcast_periodic():
                     FROM responders;
                 """))
 
-                all_locations = [list(row) for row in users_result] + [list(row) for row in responders_result]
+                all_locations = [list(row) + [0] for row in users_result] + [list(row) + [1] for row in responders_result]
 
                 regions = priority_polygons(all_locations)
 
