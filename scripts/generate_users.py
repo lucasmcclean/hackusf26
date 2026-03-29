@@ -3,16 +3,16 @@ import random
 import argparse
 
 CRISIS_MESSAGES = [
-    "My house is flooding and I can't get out!",
+    "My house is flooding and I can\'t get out!",
     "Strong winds blew the roof off my shed, please help!",
-    "Roads are blocked by debris and I can't leave.",
+    "Roads are blocked by debris and I can\'t leave.",
     "Water level rising fast in my area, need evacuation!",
     "Trees fell on power lines, no electricity.",
     "Trapped in my car due to flood water.",
     "Basement is completely under water.",
-    "My neighbor needs help, they're stuck in their house.",
-    "Windstorm damaged my windows, it's dangerous inside.",
-    "Flooded streets, can't reach the main road."
+    "My neighbor needs help, they\'re stuck in their house.",
+    "Windstorm damaged my windows, it\'s dangerous inside.",
+    "Flooded streets, can\'t reach the main road."
 ]
 
 def generate_users_sql_and_messages(num_users, lon_min, lon_max, lat_min, lat_max, table_name="users"):
@@ -35,7 +35,7 @@ def generate_users_sql_and_messages(num_users, lon_min, lon_max, lat_min, lat_ma
 
     for user_id in user_ids:
         message = random.choice(CRISIS_MESSAGES)
-        python_lines.append(f"add_user_message('{message}', '{user_id}')")
+        python_lines.append(f"add_user_message(\"{message}\", '{user_id}')")
 
     python_output = "\n".join(python_lines)
 
