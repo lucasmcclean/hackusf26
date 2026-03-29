@@ -175,3 +175,37 @@ h3 {
 .maplibregl-canvas {
   filter: saturate(1.1) contrast(1.05);
 }
+
+.map-point-popup .maplibregl-popup-content {
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: rgba(9, 18, 32, 0.9);
+  box-shadow: var(--shadow-soft);
+  color: var(--text-primary);
+  padding: 0;
+}
+
+.map-point-popup .maplibregl-popup-tip {
+  border-top-color: rgba(9, 18, 32, 0.9) !important;
+  border-bottom-color: rgba(9, 18, 32, 0.9) !important;
+}
+
+.map-point-popup-card {
+  min-width: 145px;
+  padding: 0.65rem 0.72rem;
+  font-family: 'Manrope', 'Segoe UI', sans-serif;
+}
+
+.map-point-popup-title {
+  margin-bottom: 0.32rem;
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--text-strong);
+  letter-spacing: 0.03em;
+}
+
+.map-point-popup-row {
+  font-size: 0.74rem;
+  color: var(--text-primary);
+  line-height: 1.4;
+}

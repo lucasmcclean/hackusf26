@@ -65,6 +65,8 @@ export function MapCanvas({
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
   const hoveredFeatureIdRef = useRef<number | string | null>(null)
+  const hoveredPointIndexRef = useRef<number | null>(null)
+  const pointPopupRef = useRef<maplibregl.Popup | null>(null)
   const regionsRef = useRef<RegionGroup[]>(regions)
   const onRegionClickRef = useRef<MapCanvasProps['onRegionClick']>(onRegionClick)
 
@@ -83,6 +85,8 @@ export function MapCanvas({
           properties: {
             label: `N${index + 1}`,
             locationIndex: index,
+            latitude: location[0],
+            longitude: location[1],
           },
           geometry: {
             type: 'Point',
@@ -257,14 +261,38 @@ export function MapCanvas({
       })
 
       map.addLayer({
+        id: 'points-glow',
+        type: 'circle',
+        source: 'points',
+        paint: {
+          'circle-radius': 18,
+          'circle-color': 'rgba(255, 110, 110, 0.25)',
+          'circle-blur': 0.6,
+        },
+      })
+
+      map.addLayer({
         id: 'points-circles',
         type: 'circle',
         source: 'points',
         paint: {
-          'circle-radius': 7,
-          'circle-color': 'rgba(255, 110, 110, 0.9)',
-          'circle-stroke-width': 2,
-          'circle-stroke-color': 'rgba(255, 233, 233, 0.85)',
+          'circle-radius': 11,
+          'circle-color': 'rgba(255, 110, 110, 0.95)',
+          'circle-stroke-width': 2.2,
+          'circle-stroke-color': 'rgba(255, 244, 244, 0.95)',
+        },
+      })
+
+      map.addLayer({
+        id: 'points-hover-ring',
+        type: 'circle',
+        source: 'points',
+        filter: ['==', ['get', 'locationIndex'], -1],
+        paint: {
+          'circle-radius': 16,
+          'circle-color': 'rgba(0, 0, 0, 0)',
+          'circle-stroke-width': 2.2,
+          'circle-stroke-color': 'rgba(255, 255, 255, 0.96)',
         },
       })
 
@@ -299,6 +327,10 @@ export function MapCanvas({
         map.getCanvas().style.cursor = 'pointer'
       })
 
+      map.on('mouseenter', 'points-circles', () => {
+        map.getCanvas().style.cursor = 'pointer'
+      })
+
       map.on('mousemove', 'regions-fill', (event) => {
         if (event.features?.length !== 1) return
         const feature = event.features[0]
@@ -318,6 +350,57 @@ export function MapCanvas({
           map.setFeatureState({ source: 'regions', id: hoveredFeatureIdRef.current }, { hover: false })
           hoveredFeatureIdRef.current = null
         }
+      })
+
+      map.on('mousemove', 'points-circles', (event) => {
+        const pointFeature = event.features?.[0] as MapGeoJSONFeature | undefined
+        if (!pointFeature) return
+
+        const pointIndexValue = pointFeature.properties?.locationIndex
+        const pointIndex = typeof pointIndexValue === 'number'
+          ? pointIndexValue
+          : Number(pointIndexValue)
+
+        if (!Number.isInteger(pointIndex) || pointIndex < 0) return
+        if (!event.lngLat) return
+
+        if (hoveredPointIndexRef.current !== pointIndex) {
+          hoveredPointIndexRef.current = pointIndex
+          map.setFilter('points-hover-ring', ['==', ['get', 'locationIndex'], pointIndex])
+        }
+
+        const latitudeValue = pointFeature.properties?.latitude
+        const longitudeValue = pointFeature.properties?.longitude
+        const latitude = typeof latitudeValue === 'number' ? latitudeValue : Number(latitudeValue)
+        const longitude = typeof longitudeValue === 'number' ? longitudeValue : Number(longitudeValue)
+
+        const popup = pointPopupRef.current ?? new maplibregl.Popup({
+          closeButton: false,
+          closeOnClick: false,
+          offset: 14,
+          className: 'map-point-popup',
+        })
+
+        popup
+          .setLngLat(event.lngLat)
+          .setHTML(`
+            <div class="map-point-popup-card">
+              <div class="map-point-popup-title">${pointFeature.properties?.label ?? 'Point'}</div>
+              <div class="map-point-popup-row">Lat: ${Number.isFinite(latitude) ? latitude.toFixed(6) : 'n/a'}</div>
+              <div class="map-point-popup-row">Lng: ${Number.isFinite(longitude) ? longitude.toFixed(6) : 'n/a'}</div>
+            </div>
+          `)
+          .addTo(map)
+
+        pointPopupRef.current = popup
+      })
+
+      map.on('mouseleave', 'points-circles', () => {
+        if (hoveredPointIndexRef.current !== null) {
+          hoveredPointIndexRef.current = null
+          map.setFilter('points-hover-ring', ['==', ['get', 'locationIndex'], -1])
+        }
+        pointPopupRef.current?.remove()
       })
 
       map.on('click', 'regions-fill', (event) => {
@@ -340,9 +423,12 @@ export function MapCanvas({
     mapRef.current = map
 
     return () => {
+      pointPopupRef.current?.remove()
+      pointPopupRef.current = null
       map.remove()
       mapRef.current = null
       hoveredFeatureIdRef.current = null
+      hoveredPointIndexRef.current = null
     }
   }, [])
 
