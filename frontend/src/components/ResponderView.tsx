@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
-import { Shield, Search, FileText, MessageSquare } from 'lucide-react'
+import { Shield, Search, MessageSquare } from 'lucide-react'
 import { ChatPanel, type ChatMessage } from './ChatPanel'
 import { MapCanvas } from './MapCanvas'
 import {
@@ -7,7 +7,7 @@ import {
   queryMessages,
   sendMessage,
   type LocationTuple,
-  type RegionGroup,
+  type RegionPolygon,
   type SessionController,
 } from '../services/api'
 
@@ -45,8 +45,7 @@ export default function ResponderView() {
   const [queryResult, setQueryResult] = useState('')
   const [isQuerying, setIsQuerying] = useState(false)
   const [locations, setLocations] = useState<LocationTuple[]>([])
-  const [regions, setRegions] = useState<RegionGroup[]>([])
-  const [selectedRegionIndex, setSelectedRegionIndex] = useState<number | null>(null)
+  const [regions, setRegions] = useState<RegionPolygon[]>([])
   const [sessionController, setSessionController] = useState<SessionController | null>(null)
 
   useEffect(() => {
@@ -72,6 +71,9 @@ export default function ResponderView() {
             if (!mounted) return
             setLocations(data.locations)
             setRegions(data.regions)
+            if (data.regionDebug) {
+              console.debug('Region debug (responder)', data.regionDebug)
+            }
           },
           onDisconnect: () => {
             if (!mounted) return
@@ -224,10 +226,6 @@ export default function ResponderView() {
     }
   }
 
-  const selectedRegionNodeCount = selectedRegionIndex === null
-    ? 0
-    : regions[selectedRegionIndex]?.length ?? 0
-
   return (
     <div className="h-screen flex flex-col bg-transparent">
       <header className="px-5 pt-5 md:px-6 md:pt-6">
@@ -295,25 +293,6 @@ export default function ResponderView() {
               )}
             </div>
 
-            <div className="panel-glass rounded-2xl p-4 flex-1 overflow-y-auto">
-              <div className="flex items-center gap-2 mb-3">
-                <FileText className="text-[var(--brand)]" size={18} />
-                <h3 className="section-title font-semibold">Selected Region</h3>
-              </div>
-
-              {selectedRegionIndex === null ? (
-                <p className="text-sm text-[var(--text-muted)]">Select a region on the map to review its coverage details.</p>
-              ) : (
-                <div className="space-y-2">
-                  <div className="soft-label">Region</div>
-                  <div className="text-sm font-semibold text-[var(--text-strong)]">Region {selectedRegionIndex + 1}</div>
-                  <div className="text-xs text-[var(--text-muted)]">Coverage points: {selectedRegionNodeCount}</div>
-                  <div className="rounded-lg border border-[var(--border-soft)] bg-[rgba(8,16,29,0.72)] p-2 text-xs break-all text-[var(--text-primary)]">
-                    Point references: {JSON.stringify(regions[selectedRegionIndex] ?? [])}
-                  </div>
-                </div>
-              )}
-            </div>
           </aside>
 
           <section className="panel-glass rounded-2xl p-4 md:p-5 flex flex-col overflow-hidden">
@@ -332,22 +311,13 @@ export default function ResponderView() {
             </div>
 
             <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-[var(--border-soft)] bg-[rgba(8,16,29,0.75)] p-2">
-              <MapCanvas
-                locations={locations}
-                regions={regions}
-                onRegionClick={(regionIndex) => setSelectedRegionIndex(regionIndex)}
-                highlightedRegion={selectedRegionIndex}
-              />
+              <MapCanvas locations={locations} regions={regions} />
             </div>
 
             <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
               <div className="panel-surface rounded-xl px-3 py-2">
                 <div className="soft-label mb-1">Active points</div>
                 <div className="text-sm font-semibold text-[var(--text-strong)]">{locations.length}</div>
-              </div>
-              <div className="panel-surface rounded-xl px-3 py-2">
-                <div className="soft-label mb-1">Regions</div>
-                <div className="text-sm font-semibold text-[var(--text-strong)]">{regions.length}</div>
               </div>
               <div className="panel-surface rounded-xl px-3 py-2">
                 <div className="soft-label mb-1">Location status</div>

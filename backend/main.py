@@ -11,7 +11,7 @@ import os
 
 from responders.responder import add_responder, update_responder
 from responders.responder_message import add_responder_message
-from users.user import add_user, update_user
+from users.user import add_user, upsert_user
 from users.user_message import add_user_message, query_user_messages
 from regions.region_gen import group_points_into_regions
 
@@ -33,6 +33,25 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
+def _is_zero_point(lat: float, lon: float) -> bool:
+    return abs(lat) < 1e-9 and abs(lon) < 1e-9
+
+
+def _is_valid_map_point(lat: float, lon: float) -> bool:
+    if lat is None or lon is None:
+        return False
+    try:
+        lat_f = float(lat)
+        lon_f = float(lon)
+    except (TypeError, ValueError):
+        return False
+
+    if not (-90 <= lat_f <= 90 and -180 <= lon_f <= 180):
+        return False
+    if _is_zero_point(lat_f, lon_f):
+        return False
+    return True
+
 def get_db():
     db = SessionLocal()
     try:
@@ -43,8 +62,6 @@ def get_db():
 @app.get("/")
 def root():
     return {"message": "API is running"}
-
-app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
@@ -70,54 +87,89 @@ class ConnectionManager:
     async def send_personal_message(self, message: str, client_id: str):
         websocket = self.active_connections.get(client_id)
         if websocket:
-            await websocket.send_text(message)
+            try:
+                await websocket.send_text(message)
+            except Exception:
+                self.disconnect(client_id)
 
     async def broadcast(self, message: str):
-        for websocket in self.active_connections.values():
-            await websocket.send_text(message)
+        disconnected_ids: list[str] = []
+        for client_id, websocket in list(self.active_connections.items()):
+            try:
+                await websocket.send_text(message)
+            except Exception:
+                disconnected_ids.append(client_id)
+
+        for client_id in disconnected_ids:
+            self.disconnect(client_id)
 
 manager = ConnectionManager()
-regions = []
+client_roles: dict[str, str] = {}
 
 async def broadcast_periodic():
     loop = asyncio.get_running_loop()
 
     while True:
         await asyncio.sleep(5)
-        prev_regions = None
+
         def get_locations_sync():
-            nonlocal prev_regions
             db = SessionLocal()
             try:
                 users_result = db.execute(text("""
                     SELECT ST_Y(location_geom::geometry) AS latitude,
                            ST_X(location_geom::geometry) AS longitude,
                            priority
-                    FROM users;
+                    FROM users
+                    WHERE location_geom IS NOT NULL;
                 """)).mappings().all()
 
-                # Fetch locations from responders
                 responders_result = db.execute(text("""
                     SELECT ST_Y(location_geom::geometry) AS latitude,
                            ST_X(location_geom::geometry) AS longitude
-                    FROM responders;
+                    FROM responders
+                    WHERE location_geom IS NOT NULL;
                 """)).mappings().all()
 
-                all_locations = [[row.latitude, row.longitude, 0] for row in users_result] + [[row.latitude, row.longitude, 1] for row in responders_result]
+                valid_user_points = [
+                    [row.latitude, row.longitude, int(row.priority) if row.priority is not None else 0]
+                    for row in users_result
+                    if _is_valid_map_point(row.latitude, row.longitude)
+                ]
 
-                points = [[row.latitude, row.longitude, row.priority] for row in users_result]
-                regions = group_points_into_regions(points)
+                valid_responder_points = [
+                    [row.latitude, row.longitude, 1]
+                    for row in responders_result
+                    if _is_valid_map_point(row.latitude, row.longitude)
+                ]
 
-                return all_locations, regions
+                all_locations = [
+                    [point[0], point[1], 0] for point in valid_user_points
+                ] + valid_responder_points
+
+                regions = group_points_into_regions(valid_user_points)
+
+                debug = {
+                    "users_total": len(users_result),
+                    "users_valid_for_regions": len(valid_user_points),
+                    "responders_total": len(responders_result),
+                    "responders_valid_for_map": len(valid_responder_points),
+                    "regions_count": len(regions),
+                    "active_connections": len(manager.active_connections),
+                }
+
+                return all_locations, regions, debug
             finally:
                 db.close()
 
-        locations, regions = await loop.run_in_executor(None, get_locations_sync)
-
-        await manager.broadcast(json.dumps({
-            "locations": locations,
-            "regions": regions
-        }))
+        try:
+            locations, regions, debug = await loop.run_in_executor(None, get_locations_sync)
+            await manager.broadcast(json.dumps({
+                "locations": locations,
+                "regions": regions,
+                "region_debug": debug,
+            }))
+        except Exception as error:
+            print(f"broadcast_periodic error: {error}")
 
 @app.on_event("startup")
 async def startup_event():
@@ -135,29 +187,84 @@ async def websocket_endpoint(websocket: WebSocket):
             json_data = await websocket.receive_text()
             json_data = json_data.strip().strip("'").strip('"')
             location = json.loads(json_data)
+            if not isinstance(location, list) or len(location) < 2:
+                continue
+
+            try:
+                lat = float(location[0])
+                lon = float(location[1])
+            except (TypeError, ValueError):
+                continue
+            role = client_roles.get(client_id)
+
+            if role == "user":
+                upsert_user(client_id, lat, lon)
+                continue
+
+            if role == "responder":
+                update_responder(client_id, lat, lon)
+                continue
+
             query = text("""
                 SELECT EXISTS (
                 SELECT 1 FROM users WHERE id = :user_id
                 )
                 """)
-            result = db.execute(query, {"user_id": client_id}).scalar()
-            if result:
-                update_user(client_id, float(location[0]), float(location[1]))
-            else:
-                update_responder(client_id, float(location[0]), float(location[1]))
+            user_exists = db.execute(query, {"user_id": client_id}).scalar()
+            if user_exists:
+                upsert_user(client_id, lat, lon)
+                continue
+
+            responder_query = text("""
+                SELECT EXISTS (
+                SELECT 1 FROM responders WHERE id = :responder_id
+                )
+                """)
+            responder_exists = db.execute(responder_query, {"responder_id": client_id}).scalar()
+            if responder_exists:
+                update_responder(client_id, lat, lon)
+                continue
+
+            # Role has not been persisted yet; wait for /switch.
+            continue
 
     except WebSocketDisconnect:
         manager.disconnect(client_id)
+        client_roles.pop(client_id, None)
         await manager.broadcast(f"Client {client_id} disconnected")
     finally:
         db.close()
 
 @app.post("/switch")
 async def handle_switch(client_id: str = "", role: str = "User"):
-    if role.lower() == "user":
-        add_user(client_id, 0, 0)
+    role_lower = role.lower()
+    if role_lower not in {"user", "responder"}:
+        role_lower = "user"
+
+    with engine.begin() as conn:
+        user_exists = conn.execute(
+            text("SELECT EXISTS (SELECT 1 FROM users WHERE id = :id)"),
+            {"id": client_id}
+        ).scalar()
+        responder_exists = conn.execute(
+            text("SELECT EXISTS (SELECT 1 FROM responders WHERE id = :id)"),
+            {"id": client_id}
+        ).scalar()
+
+    if role_lower == "user":
+        if responder_exists:
+            with engine.begin() as conn:
+                conn.execute(text("DELETE FROM responders WHERE id = :id"), {"id": client_id})
+        if not user_exists:
+            add_user(client_id, 0, 0)
     else:
-        add_responder(client_id, 0, 0)
+        if user_exists:
+            with engine.begin() as conn:
+                conn.execute(text("DELETE FROM users WHERE id = :id"), {"id": client_id})
+        if not responder_exists:
+            add_responder(client_id, 0, 0)
+
+    client_roles[client_id] = role_lower
     return {"status": "switch handled"}
 
 # @app.post("/report")

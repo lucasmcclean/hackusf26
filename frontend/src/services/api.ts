@@ -10,7 +10,14 @@ const RECONNECT_JITTER_MS = 250
 
 export type Role = 'user' | 'responder'
 export type LocationTuple = [number, number, number?]
-export type RegionGroup = number[]
+export type RegionPointTuple = [number, number, number]
+
+export interface RegionPolygon {
+  points: Array<[number, number]>
+  priority: number
+  relativePriority: number
+  pointCount: number
+}
 
 interface ClientIdMessage {
   client_id: string
@@ -19,6 +26,7 @@ interface ClientIdMessage {
 interface BroadcastMessage {
   locations?: unknown
   regions?: unknown
+  region_debug?: unknown
 }
 
 interface ResponderMessage {
@@ -27,7 +35,15 @@ interface ResponderMessage {
 
 export interface BackendData {
   locations: LocationTuple[]
-  regions: RegionGroup[]
+  regions: RegionPolygon[]
+  regionDebug?: {
+    usersTotal: number
+    usersValidForRegions: number
+    respondersTotal: number
+    respondersValidForMap: number
+    regionsCount: number
+    activeConnections: number
+  }
 }
 
 export interface SessionController {
@@ -79,10 +95,6 @@ function isLocationTuple(value: unknown): value is LocationTuple {
   return true
 }
 
-function isRegionGroup(value: unknown): value is RegionGroup {
-  return Array.isArray(value) && value.every((item) => Number.isInteger(item))
-}
-
 function isBroadcastMessage(value: unknown): value is BroadcastMessage {
   if (typeof value !== 'object' || value === null) return false
   const candidate = value as Partial<BroadcastMessage>
@@ -101,6 +113,34 @@ function normalizeLocationTuple(value: unknown): LocationTuple | null {
   return role === undefined ? [lat, lon] : [lat, lon, role]
 }
 
+function normalizeRegionPointTuple(value: unknown): RegionPointTuple | null {
+  if (!Array.isArray(value) || value.length < 3) return null
+  const lat = Number(value[0])
+  const lon = Number(value[1])
+  const priority = Number(value[2])
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(priority)) return null
+  return [lat, lon, priority]
+}
+
+function normalizeRegion(rawRegion: unknown): Omit<RegionPolygon, 'relativePriority'> | null {
+  if (!Array.isArray(rawRegion)) return null
+
+  const tuples = rawRegion
+    .map((entry) => normalizeRegionPointTuple(entry))
+    .filter((entry): entry is RegionPointTuple => entry !== null)
+
+  if (tuples.length === 0) return null
+
+  const points = tuples.map(([lat, lon]) => [lat, lon] as [number, number])
+  const priority = tuples.reduce((sum, tuple) => sum + tuple[2], 0) / tuples.length
+
+  return {
+    points,
+    priority,
+    pointCount: tuples.length,
+  }
+}
+
 function normalizeBroadcastData(value: BroadcastMessage): BackendData | null {
   if (!Array.isArray(value.locations)) return null
 
@@ -111,13 +151,37 @@ function normalizeBroadcastData(value: BroadcastMessage): BackendData | null {
 
   const locations = normalizedLocations as LocationTuple[]
 
-  const regions = Array.isArray(value.regions) && value.regions.every((entry) => isRegionGroup(entry))
+  const regionBases = Array.isArray(value.regions)
     ? value.regions
+      .map((entry) => normalizeRegion(entry))
+      .filter((entry): entry is Omit<RegionPolygon, 'relativePriority'> => entry !== null)
     : []
+
+  const averagePriority = regionBases.length > 0
+    ? regionBases.reduce((sum, region) => sum + region.priority, 0) / regionBases.length
+    : 0
+
+  const regions: RegionPolygon[] = regionBases.map((region) => ({
+    ...region,
+    relativePriority: region.priority - averagePriority,
+  }))
+
+  const regionDebugRaw = value.region_debug
+  const regionDebug = typeof regionDebugRaw === 'object' && regionDebugRaw !== null
+    ? {
+      usersTotal: Number((regionDebugRaw as { users_total?: unknown }).users_total ?? 0),
+      usersValidForRegions: Number((regionDebugRaw as { users_valid_for_regions?: unknown }).users_valid_for_regions ?? 0),
+      respondersTotal: Number((regionDebugRaw as { responders_total?: unknown }).responders_total ?? 0),
+      respondersValidForMap: Number((regionDebugRaw as { responders_valid_for_map?: unknown }).responders_valid_for_map ?? 0),
+      regionsCount: Number((regionDebugRaw as { regions_count?: unknown }).regions_count ?? 0),
+      activeConnections: Number((regionDebugRaw as { active_connections?: unknown }).active_connections ?? 0),
+    }
+    : undefined
 
   return {
     locations,
     regions,
+    regionDebug,
   }
 }
 
@@ -308,11 +372,9 @@ export async function connectRealtimeSession(options: ConnectOptions): Promise<S
 
       activeSocket = socket
       reconnectAttempts = 0
-      options.onClientId(clientId)
 
-      void switchRole(clientId, options.role).catch(() => {
-        options.onError?.('Role sync request failed, realtime stream is still active')
-      })
+      await switchRole(clientId, options.role)
+      options.onClientId(clientId)
 
       if (currentLocation && socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify(currentLocation))

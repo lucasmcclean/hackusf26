@@ -33,3 +33,21 @@ def update_user(id: int, lat: float, lon: float, priority: int = None):
             ),
             {"id": id, "lat": lat, "lon": lon}
         )
+
+
+def upsert_user(id: str, lat: float, lon: float):
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO users (id, location_geom)
+                VALUES (
+                    :id,
+                    ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography
+                )
+                ON CONFLICT (id)
+                DO UPDATE SET location_geom = EXCLUDED.location_geom
+                """
+            ),
+            {"id": id, "lat": lat, "lon": lon}
+        )
