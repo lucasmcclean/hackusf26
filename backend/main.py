@@ -13,7 +13,7 @@ from responders.responder import add_responder, update_responder
 from responders.responder_message import add_responder_message
 from users.user import add_user, update_user
 from users.user_message import add_user_message, query_user_messages
-from regions.region_gen import priority_polygons
+from regions.region_gen import priority_polygons, normalize
 
 load_dotenv()
 
@@ -109,10 +109,12 @@ async def broadcast_periodic():
 
         locations, regions = await loop.run_in_executor(None, get_locations_sync)
 
-        await manager.broadcast(json.dumps({
+        payload = normalize({
             "locations": locations,
             "regions": regions
-        }))
+        })
+
+        await manager.broadcast(json.dumps(payload))
 
 @app.on_event("startup")
 async def startup_event():

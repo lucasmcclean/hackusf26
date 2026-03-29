@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import maplibregl, { type GeoJSONSource, type LngLatBoundsLike, type MapGeoJSONFeature } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
-export type LocationTuple = [number, number]
+export type LocationTuple = [number, number, number?]
 export type RegionGroup = number[]
 
 interface MapCanvasProps {
@@ -87,6 +87,7 @@ export function MapCanvas({
             locationIndex: index,
             latitude: location[0],
             longitude: location[1],
+            role: location[2] ?? 0,
           },
           geometry: {
             type: 'Point',
@@ -266,7 +267,12 @@ export function MapCanvas({
         source: 'points',
         paint: {
           'circle-radius': 18,
-          'circle-color': 'rgba(255, 110, 110, 0.25)',
+          'circle-color': [
+            'case',
+            ['==', ['get', 'role'], 1],
+            'rgba(255, 110, 110, 0.25)',
+            'rgba(92, 177, 255, 0.25)',
+          ],
           'circle-blur': 0.6,
         },
       })
@@ -277,7 +283,12 @@ export function MapCanvas({
         source: 'points',
         paint: {
           'circle-radius': 11,
-          'circle-color': 'rgba(255, 110, 110, 0.95)',
+          'circle-color': [
+            'case',
+            ['==', ['get', 'role'], 1],
+            'rgba(255, 110, 110, 0.95)',
+            'rgba(74, 158, 255, 0.95)',
+          ],
           'circle-stroke-width': 2.2,
           'circle-stroke-color': 'rgba(255, 244, 244, 0.95)',
         },
@@ -371,8 +382,11 @@ export function MapCanvas({
 
         const latitudeValue = pointFeature.properties?.latitude
         const longitudeValue = pointFeature.properties?.longitude
+        const roleValue = pointFeature.properties?.role
         const latitude = typeof latitudeValue === 'number' ? latitudeValue : Number(latitudeValue)
         const longitude = typeof longitudeValue === 'number' ? longitudeValue : Number(longitudeValue)
+        const role = typeof roleValue === 'number' ? roleValue : Number(roleValue)
+        const roleLabel = role === 1 ? 'Responder' : 'User'
 
         const popup = pointPopupRef.current ?? new maplibregl.Popup({
           closeButton: false,
@@ -386,6 +400,7 @@ export function MapCanvas({
           .setHTML(`
             <div class="map-point-popup-card">
               <div class="map-point-popup-title">${pointFeature.properties?.label ?? 'Point'}</div>
+              <div class="map-point-popup-row">Role: ${roleLabel}</div>
               <div class="map-point-popup-row">Lat: ${Number.isFinite(latitude) ? latitude.toFixed(6) : 'n/a'}</div>
               <div class="map-point-popup-row">Lng: ${Number.isFinite(longitude) ? longitude.toFixed(6) : 'n/a'}</div>
             </div>

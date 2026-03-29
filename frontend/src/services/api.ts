@@ -9,7 +9,7 @@ const RECONNECT_MAX_DELAY_MS = 15000
 const RECONNECT_JITTER_MS = 250
 
 export type Role = 'user' | 'responder'
-export type LocationTuple = [number, number]
+export type LocationTuple = [number, number, number?]
 export type RegionGroup = number[]
 
 interface ClientIdMessage {

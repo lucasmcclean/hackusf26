@@ -88,3 +88,18 @@ def order_polygon_vertices(indices, coords):
         return [indices[i] for i in hull.vertices]
     except Exception:
         return indices
+
+def normalize(obj):
+    if isinstance(obj, dict):
+        return {k: normalize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [normalize(v) for v in obj]
+    if isinstance(obj, tuple):
+        return [normalize(v) for v in obj]
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return normalize(obj.tolist())
+    return obj
