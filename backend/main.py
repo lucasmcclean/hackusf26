@@ -109,6 +109,7 @@ async def broadcast_periodic():
                 points = [[row.latitude, row.longitude, row.priority] for row in users_result]
                 regions = compute_priority_polygons(points)
                 if regions != prev_regions:
+                    # TODO: Generate summaries for regions
                     print("Changed regions")
                 prev_regions = regions
 
@@ -166,15 +167,15 @@ async def handle_switch(client_id: str = "", role: str = "User"):
     return {"status": "switch handled"}
 
 @app.post("/query")
-def handle_query(client_id: str = "", content: str = ""):
-    res = query_user_messages(content)
+async def handle_query(client_id: str = "", content: str = ""):
+    res = await query_user_messages(content)
     # query the RAG
     return {"content": res.response}
 
 @app.post("/message")
 async def handle_message(client_id: str = "", content: str = "", role: str = ""):
     if role.lower() == "user":
-        add_user_message(content, client_id)
+        await add_user_message(content, client_id)
     else:
         add_responder_message(content, client_id)
         await manager.broadcast(json.dumps({ "responder_message": content }))

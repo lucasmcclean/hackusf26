@@ -16,7 +16,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "uh oh")
 
 engine = create_engine(DATABASE_URL)
 
-def add_user_message(
+async def add_user_message(
     content: str,
     user_id: str,
     lat: float = None,
@@ -25,20 +25,6 @@ def add_user_message(
     extra_metadata: dict = None
 ):
     time = time or datetime.utcnow()
-
-    priority = query_user_messages("Return a single integer from 0-10 for this user. 0 indicates that the user is likely completely safe and is zero danger at all. 10 indicates that this user is in mortal danger and requires immediate assistance. Do not include in whitespace, backticks, etc. Just a single number please. If you have no relevant info just return 0.", user_id=user_id).response
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                """
-                UPDATE users
-                SET priority = :priority
-                WHERE id = :id
-                """
-            ),
-            {"id": user_id, "priority": int(priority)}
-        )
-
 
     location_geom = WKTElement(f"POINT({lon} {lat})", srid=4326) if lat is not None and lon is not None else None
 
@@ -79,10 +65,28 @@ def add_user_message(
     if extra_metadata:
         metadata.update(extra_metadata)
 
+    resp = await query_user_messages("Return a single integer from 0-10 for this user. 0 indicates that the user is likely completely safe and is zero danger at all. 10 indicates that this user is in mortal danger and requires immediate assistance. Do not include in whitespace, backticks, etc. Just a single number please. If you have no relevant info just return 0.", user_id=user_id)
+    priority = resp.response
+    try:
+        priority = int(priority)
+    except Exception:
+        priority = 0
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                UPDATE users
+                SET priority = :priority
+                WHERE id = :id
+                """
+            ),
+            {"id": user_id, "priority": priority}
+        )
+
     doc = Document(text=content, metadata=metadata)
     user_messages_index.insert(doc)
 
-def query_user_messages(
+async def query_user_messages(
     query_text: str,
     top_k: int = 5,
     user_id: str = None,
@@ -139,4 +143,4 @@ def query_user_messages(
     query_engine = RetrieverQueryEngine(
         retriever=retriever,
     )
-    return query_engine.query(query_text)
+    return await query_engine.aquery(query_text)
