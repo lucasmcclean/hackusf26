@@ -3,12 +3,20 @@ import maplibregl, { type GeoJSONSource, type LngLatBoundsLike, type MapGeoJSONF
 import 'maplibre-gl/dist/maplibre-gl.css'
 import type { RegionPolygon } from '../services/api'
 
-export type LocationTuple = [number, number, number?]
+export type LocationTuple = [number, number, number?, string?]
+
+export interface MapPointSelection {
+  locationIndex: number
+  role: number
+  entityId: string | null
+}
 
 interface MapCanvasProps {
   locations: LocationTuple[]
   regions?: RegionPolygon[]
   onRegionClick?: (regionIndex: number) => void
+  onPointClick?: (selection: MapPointSelection) => void
+  currentClientId?: string
 }
 
 const TAMPA_BOUNDS: LngLatBoundsLike = [[-82.62, 27.82], [-82.24, 28.19]]
@@ -165,6 +173,33 @@ function twoPointBuffer(points: [number, number][], halfSize: number): [number, 
   ]
 }
 
+function dedupePoints(points: [number, number][], epsilon: number): [number, number][] {
+  const unique: [number, number][] = []
+  for (const point of points) {
+    const exists = unique.some((candidate) => Math.hypot(candidate[0] - point[0], candidate[1] - point[1]) <= epsilon)
+    if (!exists) {
+      unique.push(point)
+    }
+  }
+  return unique
+}
+
+function getMaxPairDistance(points: [number, number][]): number {
+  if (points.length < 2) return 0
+  let maxDistance = 0
+
+  for (let i = 0; i < points.length; i += 1) {
+    for (let j = i + 1; j < points.length; j += 1) {
+      const distance = Math.hypot(points[i][0] - points[j][0], points[i][1] - points[j][1])
+      if (distance > maxDistance) {
+        maxDistance = distance
+      }
+    }
+  }
+
+  return maxDistance
+}
+
 function expandRing(points: [number, number][], expansion: number): [number, number][] {
   if (points.length < 4) return points
 
@@ -195,33 +230,140 @@ function expandRing(points: [number, number][], expansion: number): [number, num
 
 function buildRegionRing(regionPoints: Array<[number, number]>): [number, number][] {
   const regionExpansion = 0.003
-  const singlePointRadius = 0.0012
+  const singlePointRadius = 0.001
+  const dedupeEpsilon = 0.00008
+  const nearPairThreshold = 0.00045
   const validPoints = regionPoints
     .filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1]))
     .map((point) => normalizeToLngLat(point))
 
-  if (validPoints.length === 0) return []
-  if (validPoints.length === 1) {
-    return pointCircle(validPoints[0][0], validPoints[0][1], singlePointRadius)
-  }
-  if (validPoints.length === 2) {
-    return expandRing(closeRing(twoPointBuffer(validPoints, 0.0035)), regionExpansion)
+  const uniquePoints = dedupePoints(validPoints, dedupeEpsilon)
+
+  if (uniquePoints.length === 0) return []
+  if (uniquePoints.length === 1) {
+    return pointCircle(uniquePoints[0][0], uniquePoints[0][1], singlePointRadius)
   }
 
-  const hull = convexHull(validPoints)
-  if (hull.length < 3) {
-    return expandRing(closeRing(twoPointBuffer(validPoints.slice(0, 2), 0.0035)), regionExpansion)
+  if (uniquePoints.length === 2) {
+    const pairDistance = getMaxPairDistance(uniquePoints)
+    if (pairDistance <= nearPairThreshold) {
+      return pointCircle(uniquePoints[0][0], uniquePoints[0][1], singlePointRadius)
+    }
+    return closeRing(twoPointBuffer(uniquePoints, 0.0026))
   }
-  return expandRing(closeRing(hull), regionExpansion)
+
+  const hull = convexHull(uniquePoints)
+  if (hull.length < 3) {
+    const pairDistance = getMaxPairDistance(uniquePoints)
+    if (pairDistance <= nearPairThreshold) {
+      return pointCircle(uniquePoints[0][0], uniquePoints[0][1], singlePointRadius)
+    }
+    return closeRing(twoPointBuffer(uniquePoints.slice(0, 2), 0.0026))
+  }
+
+  const footprint = getMaxPairDistance(hull)
+  const dynamicExpansion = footprint <= 0.006 ? 0.0012 : regionExpansion
+  return expandRing(closeRing(hull), dynamicExpansion)
 }
 
-export function MapCanvas({ locations, regions = [], onRegionClick }: MapCanvasProps) {
+function getFeatureLocationIndex(feature: GeoJSON.Feature<GeoJSON.Point>): number | null {
+  const rawValue = (feature.properties as { locationIndex?: unknown } | null)?.locationIndex
+  const locationIndex = typeof rawValue === 'number' ? rawValue : Number(rawValue)
+  if (!Number.isInteger(locationIndex) || locationIndex < 0) return null
+  return locationIndex
+}
+
+function getPointFeatureByLocationIndex(
+  pointsCollection: GeoJSON.FeatureCollection<GeoJSON.Point>,
+  locationIndex: number,
+): GeoJSON.Feature<GeoJSON.Point> | null {
+  return pointsCollection.features.find((feature) => getFeatureLocationIndex(feature) === locationIndex) ?? null
+}
+
+function getOverlapGroupIndices(
+  map: maplibregl.Map,
+  pointsCollection: GeoJSON.FeatureCollection<GeoJSON.Point>,
+  hoveredIndex: number,
+  radiusPx: number,
+): number[] {
+  const hoveredFeature = pointsCollection.features.find((feature) => getFeatureLocationIndex(feature) === hoveredIndex)
+  if (!hoveredFeature) return []
+
+  const hoveredCoordinates = hoveredFeature.geometry.coordinates
+  const hoveredPixel = map.project({ lng: hoveredCoordinates[0], lat: hoveredCoordinates[1] })
+  const groupIndices: number[] = []
+
+  for (const feature of pointsCollection.features) {
+    const candidateIndex = getFeatureLocationIndex(feature)
+    if (candidateIndex === null) continue
+
+    const coordinates = feature.geometry.coordinates
+    const candidatePixel = map.project({ lng: coordinates[0], lat: coordinates[1] })
+    const dx = candidatePixel.x - hoveredPixel.x
+    const dy = candidatePixel.y - hoveredPixel.y
+    if (Math.hypot(dx, dy) <= radiusPx) {
+      groupIndices.push(candidateIndex)
+    }
+  }
+
+  groupIndices.sort((a, b) => a - b)
+  return groupIndices
+}
+
+function buildSpiderfiedPoints(
+  map: maplibregl.Map,
+  pointsCollection: GeoJSON.FeatureCollection<GeoJSON.Point>,
+  groupIndices: number[],
+  hoveredIndex: number,
+): GeoJSON.FeatureCollection<GeoJSON.Point> {
+  const hoveredFeature = getPointFeatureByLocationIndex(pointsCollection, hoveredIndex)
+  if (!hoveredFeature) return pointsCollection
+
+  const orderedIndices = [hoveredIndex, ...groupIndices.filter((index) => index !== hoveredIndex)]
+  const center = map.project({
+    lng: hoveredFeature.geometry.coordinates[0],
+    lat: hoveredFeature.geometry.coordinates[1],
+  })
+  const ringRadiusPx = Math.min(44, 20 + orderedIndices.length * 1.8)
+
+  const displacedCoordinatesByIndex = new Map<number, [number, number]>()
+  orderedIndices.forEach((locationIndex, offsetIndex) => {
+    const angle = (offsetIndex / Math.max(orderedIndices.length, 1)) * Math.PI * 2
+    const point = map.unproject([
+      center.x + Math.cos(angle) * ringRadiusPx,
+      center.y + Math.sin(angle) * ringRadiusPx,
+    ])
+    displacedCoordinatesByIndex.set(locationIndex, [point.lng, point.lat])
+  })
+
+  return {
+    type: 'FeatureCollection',
+    features: pointsCollection.features.map((feature) => {
+      const locationIndex = getFeatureLocationIndex(feature)
+      if (locationIndex === null || !displacedCoordinatesByIndex.has(locationIndex)) {
+        return feature
+      }
+
+      const displaced = displacedCoordinatesByIndex.get(locationIndex) as [number, number]
+      return {
+        ...feature,
+        geometry: {
+          ...feature.geometry,
+          coordinates: displaced,
+        },
+      }
+    }),
+  }
+}
+
+export function MapCanvas({ locations, regions = [], onRegionClick, onPointClick, currentClientId }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
   const hoveredFeatureIdRef = useRef<number | string | null>(null)
   const hoveredPointIndexRef = useRef<number | null>(null)
   const pointPopupRef = useRef<maplibregl.Popup | null>(null)
   const onRegionClickRef = useRef<MapCanvasProps['onRegionClick']>(onRegionClick)
+  const onPointClickRef = useRef<MapCanvasProps['onPointClick']>(onPointClick)
   const latestPointsGeoJsonRef = useRef<GeoJSON.FeatureCollection<GeoJSON.Point>>({
     type: 'FeatureCollection',
     features: [],
@@ -230,6 +372,11 @@ export function MapCanvas({ locations, regions = [], onRegionClick }: MapCanvasP
     type: 'FeatureCollection',
     features: [],
   })
+  const spiderfiedGroupKeyRef = useRef<string | null>(null)
+  const spiderfiedGroupIndicesRef = useRef<number[]>([])
+  const spiderAnchorPixelRef = useRef<{ x: number, y: number } | null>(null)
+  const spiderActiveRadiusRef = useRef<number>(0)
+  const spiderCollapseTimerRef = useRef<number | null>(null)
 
   const pointsGeoJson = useMemo<GeoJSON.FeatureCollection<GeoJSON.Point>>(() => {
     return {
@@ -244,6 +391,10 @@ export function MapCanvas({ locations, regions = [], onRegionClick }: MapCanvasP
             latitude: location[0],
             longitude: location[1],
             role: location[2] ?? 0,
+            entityId: typeof location[3] === 'string' ? location[3] : null,
+            isSelf: typeof location[3] === 'string' && typeof currentClientId === 'string'
+              ? location[3] === currentClientId
+              : false,
           },
           geometry: {
             type: 'Point',
@@ -251,7 +402,7 @@ export function MapCanvas({ locations, regions = [], onRegionClick }: MapCanvasP
           },
         })),
     }
-  }, [locations])
+  }, [currentClientId, locations])
 
   const regionVisuals = useMemo(() => {
     if (regions.length === 0) {
@@ -315,6 +466,10 @@ export function MapCanvas({ locations, regions = [], onRegionClick }: MapCanvasP
   }, [onRegionClick])
 
   useEffect(() => {
+    onPointClickRef.current = onPointClick
+  }, [onPointClick])
+
+  useEffect(() => {
     latestPointsGeoJsonRef.current = pointsGeoJson
   }, [pointsGeoJson])
 
@@ -348,6 +503,31 @@ export function MapCanvas({ locations, regions = [], onRegionClick }: MapCanvasP
     })
 
     map.on('load', () => {
+      const clearSpiderCollapseTimer = () => {
+        if (spiderCollapseTimerRef.current !== null) {
+          window.clearTimeout(spiderCollapseTimerRef.current)
+          spiderCollapseTimerRef.current = null
+        }
+      }
+
+      const clearSpiderfy = () => {
+        clearSpiderCollapseTimer()
+        const source = map.getSource('points') as GeoJSONSource | undefined
+        source?.setData(latestPointsGeoJsonRef.current)
+        spiderfiedGroupKeyRef.current = null
+        spiderfiedGroupIndicesRef.current = []
+        spiderAnchorPixelRef.current = null
+        spiderActiveRadiusRef.current = 0
+      }
+
+      const scheduleSpiderfyCollapse = () => {
+        if (spiderCollapseTimerRef.current !== null) return
+        spiderCollapseTimerRef.current = window.setTimeout(() => {
+          spiderCollapseTimerRef.current = null
+          clearSpiderfy()
+        }, 100)
+      }
+
       map.addSource('tampa-boundary', {
         type: 'geojson',
         data: TAMPA_BOUNDARY,
@@ -404,6 +584,8 @@ export function MapCanvas({ locations, regions = [], onRegionClick }: MapCanvasP
           'circle-radius': 18,
           'circle-color': [
             'case',
+            ['==', ['get', 'isSelf'], true],
+            'rgba(75, 201, 120, 0.28)',
             ['==', ['get', 'role'], 1],
             'rgba(255, 110, 110, 0.25)',
             'rgba(92, 177, 255, 0.25)',
@@ -417,9 +599,16 @@ export function MapCanvas({ locations, regions = [], onRegionClick }: MapCanvasP
         type: 'circle',
         source: 'points',
         paint: {
-          'circle-radius': 11,
+          'circle-radius': [
+            'case',
+            ['==', ['get', 'isSelf'], true],
+            12.5,
+            11,
+          ],
           'circle-color': [
             'case',
+            ['==', ['get', 'isSelf'], true],
+            'rgba(75, 201, 120, 0.98)',
             ['==', ['get', 'role'], 1],
             'rgba(255, 110, 110, 0.95)',
             'rgba(74, 158, 255, 0.95)',
@@ -546,6 +735,40 @@ export function MapCanvas({ locations, regions = [], onRegionClick }: MapCanvasP
         if (!Number.isInteger(pointIndex) || pointIndex < 0) return
         if (!event.lngLat) return
 
+        const overlapGroup = getOverlapGroupIndices(map, latestPointsGeoJsonRef.current, pointIndex, 14)
+        const nextGroupKey = overlapGroup.length > 1 ? overlapGroup.join(',') : null
+
+        if (nextGroupKey) {
+          const anchorFeature = getPointFeatureByLocationIndex(latestPointsGeoJsonRef.current, pointIndex)
+          if (anchorFeature) {
+            const anchorCoordinates = anchorFeature.geometry.coordinates
+            const anchorPixel = map.project({ lng: anchorCoordinates[0], lat: anchorCoordinates[1] })
+            const ringRadius = Math.min(44, 20 + overlapGroup.length * 1.8)
+            spiderAnchorPixelRef.current = { x: anchorPixel.x, y: anchorPixel.y }
+            spiderActiveRadiusRef.current = ringRadius + 18
+            spiderfiedGroupIndicesRef.current = [...overlapGroup]
+          }
+        }
+
+        if (nextGroupKey) {
+          if (spiderCollapseTimerRef.current !== null) {
+            window.clearTimeout(spiderCollapseTimerRef.current)
+            spiderCollapseTimerRef.current = null
+          }
+        }
+
+        if (nextGroupKey !== spiderfiedGroupKeyRef.current) {
+          const source = map.getSource('points') as GeoJSONSource | undefined
+          if (source) {
+            if (overlapGroup.length > 1) {
+              source.setData(buildSpiderfiedPoints(map, latestPointsGeoJsonRef.current, overlapGroup, pointIndex))
+              spiderfiedGroupKeyRef.current = nextGroupKey
+            } else {
+              clearSpiderfy()
+            }
+          }
+        }
+
         if (hoveredPointIndexRef.current !== pointIndex) {
           hoveredPointIndexRef.current = pointIndex
           map.setFilter('points-hover-ring', ['==', ['get', 'locationIndex'], pointIndex])
@@ -587,7 +810,67 @@ export function MapCanvas({ locations, regions = [], onRegionClick }: MapCanvasP
           hoveredPointIndexRef.current = null
           map.setFilter('points-hover-ring', ['==', ['get', 'locationIndex'], -1])
         }
+
+        if (spiderfiedGroupKeyRef.current) {
+          scheduleSpiderfyCollapse()
+        }
         pointPopupRef.current?.remove()
+      })
+
+      map.on('mousemove', (event) => {
+        if (!spiderfiedGroupKeyRef.current) return
+
+        const pointHits = map.queryRenderedFeatures(event.point, { layers: ['points-circles'] }) as MapGeoJSONFeature[]
+        const hoveredSpiderMember = pointHits.some((feature) => {
+          const value = feature.properties?.locationIndex
+          const index = typeof value === 'number' ? value : Number(value)
+          return Number.isInteger(index) && spiderfiedGroupIndicesRef.current.includes(index)
+        })
+
+        const anchor = spiderAnchorPixelRef.current
+        const radius = spiderActiveRadiusRef.current
+        const inAnchorZone = Boolean(anchor) && Math.hypot(event.point.x - anchor.x, event.point.y - anchor.y) <= radius
+
+        if (hoveredSpiderMember || inAnchorZone) {
+          if (spiderCollapseTimerRef.current !== null) {
+            window.clearTimeout(spiderCollapseTimerRef.current)
+            spiderCollapseTimerRef.current = null
+          }
+          return
+        }
+
+        scheduleSpiderfyCollapse()
+      })
+
+      map.on('contextmenu', 'points-circles', (event) => {
+        const handler = onPointClickRef.current
+        if (!handler) return
+
+        event.preventDefault()
+
+        const pointFeature = event.features?.[0] as MapGeoJSONFeature | undefined
+        if (!pointFeature) return
+
+        const pointIndexValue = pointFeature.properties?.locationIndex
+        const pointIndex = typeof pointIndexValue === 'number'
+          ? pointIndexValue
+          : Number(pointIndexValue)
+        if (!Number.isInteger(pointIndex) || pointIndex < 0) return
+
+        const roleValue = pointFeature.properties?.role
+        const role = typeof roleValue === 'number' ? roleValue : Number(roleValue)
+        if (!Number.isFinite(role)) return
+
+        const entityIdValue = pointFeature.properties?.entityId
+        const entityId = typeof entityIdValue === 'string' && entityIdValue.trim().length > 0
+          ? entityIdValue
+          : null
+
+        handler({
+          locationIndex: pointIndex,
+          role,
+          entityId,
+        })
       })
     })
 
@@ -596,10 +879,18 @@ export function MapCanvas({ locations, regions = [], onRegionClick }: MapCanvasP
     return () => {
       pointPopupRef.current?.remove()
       pointPopupRef.current = null
+      if (spiderCollapseTimerRef.current !== null) {
+        window.clearTimeout(spiderCollapseTimerRef.current)
+        spiderCollapseTimerRef.current = null
+      }
       map.remove()
       mapRef.current = null
       hoveredFeatureIdRef.current = null
       hoveredPointIndexRef.current = null
+      spiderfiedGroupKeyRef.current = null
+      spiderfiedGroupIndicesRef.current = []
+      spiderAnchorPixelRef.current = null
+      spiderActiveRadiusRef.current = 0
     }
   }, [])
 
@@ -609,6 +900,14 @@ export function MapCanvas({ locations, regions = [], onRegionClick }: MapCanvasP
 
     const source = map.getSource('points') as GeoJSONSource | undefined
     source?.setData(pointsGeoJson)
+    if (spiderCollapseTimerRef.current !== null) {
+      window.clearTimeout(spiderCollapseTimerRef.current)
+      spiderCollapseTimerRef.current = null
+    }
+    spiderfiedGroupKeyRef.current = null
+    spiderfiedGroupIndicesRef.current = []
+    spiderAnchorPixelRef.current = null
+    spiderActiveRadiusRef.current = 0
     if (!source) {
       console.debug('MapCanvas points source missing on update', {
         features: pointsGeoJson.features.length,

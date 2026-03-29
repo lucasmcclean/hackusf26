@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import { Shield, Search, FileText, MessageSquare } from 'lucide-react'
 import { ChatPanel, type ChatMessage } from './ChatPanel'
-import { MapCanvas } from './MapCanvas'
+import { MapCanvas, type MapPointSelection } from './MapCanvas'
+import { MarkdownContent } from './MarkdownContent'
 import {
   connectRealtimeSession,
+  fetchUserMessages,
   queryMessages,
   requestRegionReport,
   sendMessage,
@@ -11,6 +13,7 @@ import {
   type RegionReport,
   type RegionPolygon,
   type SessionController,
+  type UserMessageRecord,
 } from '../services/api'
 
 function getCurrentLocation(): Promise<LocationTuple | null> {
@@ -51,6 +54,11 @@ export default function ResponderView() {
   const [isLoadingRegionReport, setIsLoadingRegionReport] = useState(false)
   const [regionReportError, setRegionReportError] = useState('')
   const [isRegionReportModalOpen, setIsRegionReportModalOpen] = useState(false)
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null)
+  const [isUserMessagesModalOpen, setIsUserMessagesModalOpen] = useState(false)
+  const [isLoadingUserMessages, setIsLoadingUserMessages] = useState(false)
+  const [userMessagesError, setUserMessagesError] = useState('')
+  const [selectedUserMessages, setSelectedUserMessages] = useState<UserMessageRecord[]>([])
   const [locations, setLocations] = useState<LocationTuple[]>([])
   const [regions, setRegions] = useState<RegionPolygon[]>([])
   const [sessionController, setSessionController] = useState<SessionController | null>(null)
@@ -250,6 +258,32 @@ export default function ResponderView() {
     }
   }
 
+  const handlePointClick = async (selection: MapPointSelection) => {
+    if (selection.role !== 0) return
+    if (!selection.entityId) {
+      setUserMessagesError('No user id available for this node.')
+      setSelectedUserMessages([])
+      setSelectedUserId(null)
+      setIsUserMessagesModalOpen(true)
+      return
+    }
+
+    setSelectedUserId(selection.entityId)
+    setUserMessagesError('')
+    setSelectedUserMessages([])
+    setIsLoadingUserMessages(true)
+    setIsUserMessagesModalOpen(true)
+
+    try {
+      const records = await fetchUserMessages(selection.entityId)
+      setSelectedUserMessages(records)
+    } catch {
+      setUserMessagesError('Unable to load user messages right now. Please try again shortly.')
+    } finally {
+      setIsLoadingUserMessages(false)
+    }
+  }
+
   return (
     <div className="h-screen flex flex-col bg-transparent">
       <header className="px-5 pt-5 md:px-6 md:pt-6">
@@ -312,7 +346,9 @@ export default function ResponderView() {
               {queryResult && (
                 <div className="mt-4 border-t border-[var(--border-soft)] pt-4">
                   <span className="soft-label">Result</span>
-                  <p className="mt-2 rounded-lg border border-[var(--border-soft)] bg-[rgba(8,16,29,0.72)] p-2 text-sm text-[var(--text-primary)]">{queryResult}</p>
+                  <div className="mt-2 rounded-lg border border-[var(--border-soft)] bg-[rgba(8,16,29,0.72)] p-3">
+                    <MarkdownContent content={queryResult} />
+                  </div>
                 </div>
               )}
             </div>
@@ -350,8 +386,8 @@ export default function ResponderView() {
                           Open full report
                         </button>
                       </div>
-                      <div className="max-h-56 md:max-h-72 overflow-y-auto rounded-lg border border-[var(--border-soft)] bg-[rgba(8,16,29,0.72)] p-3 text-sm leading-7 text-[var(--text-primary)] whitespace-pre-wrap break-words">
-                        {regionReport.report || 'No report text returned.'}
+                      <div className="max-h-56 md:max-h-72 overflow-y-auto rounded-lg border border-[var(--border-soft)] bg-[rgba(8,16,29,0.72)] p-3">
+                        <MarkdownContent content={regionReport.report || 'No report text returned.'} />
                       </div>
                     </>
                   )}
@@ -381,6 +417,8 @@ export default function ResponderView() {
                 locations={locations}
                 regions={regions}
                 onRegionClick={handleRegionClick}
+                onPointClick={handlePointClick}
+                currentClientId={clientId}
               />
             </div>
 
@@ -434,9 +472,59 @@ export default function ResponderView() {
               </button>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-[var(--border-soft)] bg-[rgba(8,16,29,0.72)] p-4 text-sm leading-7 text-[var(--text-primary)] whitespace-pre-wrap break-words">
-              {regionReport.report || 'No report text returned.'}
+            <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-[var(--border-soft)] bg-[rgba(8,16,29,0.72)] p-4">
+              <MarkdownContent content={regionReport.report || 'No report text returned.'} />
             </div>
+          </div>
+        </div>
+      )}
+
+      {isUserMessagesModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(3,8,15,0.75)] p-4">
+          <div className="panel-glass w-full max-w-3xl max-h-[85vh] rounded-2xl p-5 flex flex-col">
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <div>
+                <div className="soft-label">User messages</div>
+                <h3 className="text-lg font-semibold text-[var(--text-strong)]">
+                  {selectedUserId ? `User ${selectedUserId}` : 'User details'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsUserMessagesModalOpen(false)}
+                className="btn-muted rounded-md px-3 py-1.5 text-xs font-semibold"
+              >
+                Close
+              </button>
+            </div>
+
+            {isLoadingUserMessages && (
+              <p className="text-sm text-[var(--text-muted)]">Loading user messages...</p>
+            )}
+
+            {!isLoadingUserMessages && userMessagesError && (
+              <p className="text-sm text-[var(--danger)]">{userMessagesError}</p>
+            )}
+
+            {!isLoadingUserMessages && !userMessagesError && selectedUserMessages.length === 0 && (
+              <p className="text-sm text-[var(--text-muted)]">No messages were found for this user yet.</p>
+            )}
+
+            {!isLoadingUserMessages && !userMessagesError && selectedUserMessages.length > 0 && (
+              <div className="min-h-0 flex-1 overflow-y-auto space-y-2">
+                {selectedUserMessages.map((message, index) => (
+                  <div
+                    key={message.id || `${message.userId}-${message.time ?? index}`}
+                    className="rounded-lg border border-[var(--border-soft)] bg-[rgba(8,16,29,0.72)] p-3"
+                  >
+                    <div className="mb-2 text-xs text-[var(--text-muted)]">
+                      {message.time ? new Date(message.time).toLocaleString() : 'Unknown timestamp'}
+                    </div>
+                    <MarkdownContent content={message.content || '(empty message)'} />
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

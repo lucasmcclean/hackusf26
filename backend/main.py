@@ -223,7 +223,8 @@ async def broadcast_periodic():
             db = SessionLocal()
             try:
                 users_result = db.execute(text("""
-                    SELECT ST_Y(location_geom::geometry) AS latitude,
+                    SELECT id,
+                           ST_Y(location_geom::geometry) AS latitude,
                            ST_X(location_geom::geometry) AS longitude,
                            priority
                     FROM users
@@ -231,35 +232,53 @@ async def broadcast_periodic():
                 """)).mappings().all()
 
                 responders_result = db.execute(text("""
-                    SELECT ST_Y(location_geom::geometry) AS latitude,
+                    SELECT id,
+                           ST_Y(location_geom::geometry) AS latitude,
                            ST_X(location_geom::geometry) AS longitude
                     FROM responders
                     WHERE location_geom IS NOT NULL;
                 """)).mappings().all()
 
-                valid_user_points = [
-                    [row.latitude, row.longitude, int(row.priority) if row.priority is not None else 0]
+                valid_users = [
+                    {
+                        "id": str(row.id),
+                        "latitude": float(row.latitude),
+                        "longitude": float(row.longitude),
+                        "priority": int(row.priority) if row.priority is not None else 0,
+                    }
                     for row in users_result
                     if _is_valid_map_point(row.latitude, row.longitude)
                 ]
 
-                valid_responder_points = [
-                    [row.latitude, row.longitude, 1]
+                valid_responders = [
+                    {
+                        "id": str(row.id),
+                        "latitude": float(row.latitude),
+                        "longitude": float(row.longitude),
+                    }
                     for row in responders_result
                     if _is_valid_map_point(row.latitude, row.longitude)
                 ]
 
                 all_locations = [
-                    [point[0], point[1], 0] for point in valid_user_points
-                ] + valid_responder_points
+                    [user["latitude"], user["longitude"], 0, user["id"]] for user in valid_users
+                ] + [
+                    [responder["latitude"], responder["longitude"], 1, responder["id"]]
+                    for responder in valid_responders
+                ]
+
+                valid_user_points = [
+                    [user["latitude"], user["longitude"], user["priority"]]
+                    for user in valid_users
+                ]
 
                 regions = group_points_into_regions(valid_user_points)
 
                 debug = {
                     "users_total": len(users_result),
-                    "users_valid_for_regions": len(valid_user_points),
+                    "users_valid_for_regions": len(valid_users),
                     "responders_total": len(responders_result),
-                    "responders_valid_for_map": len(valid_responder_points),
+                    "responders_valid_for_map": len(valid_responders),
                     "regions_count": len(regions),
                     "active_connections": len(manager.active_connections),
                 }
@@ -431,8 +450,19 @@ async def get_summary_for_region(region_id: int = 0, prompt: str = "", db: Sessi
         "report": res.response,
     }
 
+@app.get("/user_messages")
 def get_user_messages(client_id: str = "", user_id: str = "", db: Session = Depends(get_db)):
-    sql = text("SELECT * FROM user_messages WHERE user_id = :user_id")
+    sql = text("""
+        SELECT id,
+               user_id,
+               content,
+               time,
+               ST_Y(location_geom::geometry) AS latitude,
+               ST_X(location_geom::geometry) AS longitude
+        FROM user_messages
+        WHERE user_id = :user_id
+        ORDER BY time DESC
+    """)
     results = db.execute(sql, {"user_id": user_id}).fetchall()
     messages = [dict(row._mapping) for row in results]
     return {"messages": messages}

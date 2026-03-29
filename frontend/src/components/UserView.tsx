@@ -264,7 +264,7 @@ export default function UserView() {
             </div>
 
             <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-[var(--border-soft)] bg-[rgba(8,16,29,0.75)] p-2">
-              <MapCanvas locations={locations} regions={regions} />
+              <MapCanvas locations={locations} regions={regions} currentClientId={clientId} />
             </div>
 
             <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">

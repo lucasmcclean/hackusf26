@@ -9,7 +9,7 @@ const RECONNECT_MAX_DELAY_MS = 15000
 const RECONNECT_JITTER_MS = 250
 
 export type Role = 'user' | 'responder'
-export type LocationTuple = [number, number, number?]
+export type LocationTuple = [number, number, number?, string?]
 export type RegionPointTuple = [number, number, number]
 
 export interface RegionPolygon {
@@ -58,6 +58,15 @@ export interface RegionReport {
   report: string
 }
 
+export interface UserMessageRecord {
+  id: string
+  userId: string
+  content: string
+  time: string | null
+  latitude: number | null
+  longitude: number | null
+}
+
 interface ConnectOptions {
   role: Role
   location?: LocationTuple | null
@@ -99,6 +108,10 @@ function isLocationTuple(value: unknown): value is LocationTuple {
     if (!Number.isFinite(role)) return false
   }
 
+  if (value.length >= 4 && value[3] !== undefined && value[3] !== null) {
+    if (typeof value[3] !== 'string') return false
+  }
+
   return true
 }
 
@@ -116,8 +129,14 @@ function normalizeLocationTuple(value: unknown): LocationTuple | null {
   const role = value.length >= 3 && value[2] !== undefined && value[2] !== null
     ? Number(value[2])
     : undefined
+  const entityId = value.length >= 4 && typeof value[3] === 'string'
+    ? value[3]
+    : undefined
 
-  return role === undefined ? [lat, lon] : [lat, lon, role]
+  if (role === undefined && entityId === undefined) return [lat, lon]
+  if (entityId === undefined) return [lat, lon, role]
+  if (role === undefined) return [lat, lon, 0, entityId]
+  return [lat, lon, role, entityId]
 }
 
 function normalizeRegionPointTuple(value: unknown): RegionPointTuple | null {
@@ -343,6 +362,39 @@ export async function requestRegionReport(regionId: number, prompt?: string): Pr
     matchedUserCount: Number(json.matched_user_count ?? 0),
     report: typeof json.report === 'string' ? json.report : '',
   }
+}
+
+export async function fetchUserMessages(userId: string): Promise<UserMessageRecord[]> {
+  const queryParams = new URLSearchParams()
+  queryParams.set('user_id', userId)
+  const response = await fetch(`${API_BASE_URL}/user_messages?${queryParams.toString()}`, {
+    method: 'GET',
+  })
+
+  if (!response.ok) {
+    throw new Error(`User messages request failed (${response.status})`)
+  }
+
+  const json = await response.json() as {
+    messages?: Array<{
+      id?: unknown
+      user_id?: unknown
+      content?: unknown
+      time?: unknown
+      latitude?: unknown
+      longitude?: unknown
+    }>
+  }
+
+  const messages = Array.isArray(json.messages) ? json.messages : []
+  return messages.map((message) => ({
+    id: String(message.id ?? ''),
+    userId: String(message.user_id ?? userId),
+    content: typeof message.content === 'string' ? message.content : '',
+    time: typeof message.time === 'string' ? message.time : null,
+    latitude: typeof message.latitude === 'number' ? message.latitude : null,
+    longitude: typeof message.longitude === 'number' ? message.longitude : null,
+  }))
 }
 
 export async function connectRealtimeSession(options: ConnectOptions): Promise<SessionController> {
