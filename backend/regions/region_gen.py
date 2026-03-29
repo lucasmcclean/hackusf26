@@ -230,3 +230,30 @@ def _point_square(xy: np.ndarray, half: float = 0.5) -> list[list[float]]:
         [round(x - half, 6), round(y + half, 6)],
         [round(x - half, 6), round(y - half, 6)],
     ]
+
+def is_point_in_polygon(point, polygon):
+    """
+    Determines if a 2D point is inside a polygon.
+    
+    :param point: List or array of [x, y]
+    :param polygon: List of lists or Nx2 array [[x1, y1], [x2, y2], ...]
+    :return: Boolean (True if inside, False if outside)
+    """
+    x, y = point
+    n = len(polygon)
+    inside = False
+
+    p1x, p1y = polygon[0]
+    for i in range(n + 1):
+        p2x, p2y = polygon[i % n]
+        
+        if y > min(p1y, p2y):
+            if y <= max(p1y, p2y):
+                if x <= max(p1x, p2x):
+                    if p1y != p2y:
+                        x_inters = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+                    if p1x == p2x or x <= x_inters:
+                        inside = not inside
+        p1x, p1y = p2x, p2y
+
+    return inside

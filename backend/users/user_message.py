@@ -67,6 +67,7 @@ async def add_user_message(
 
     resp = await query_user_messages("Return a single integer from 0-10 for this user. 0 indicates that the user is likely completely safe and is zero danger at all. 10 indicates that this user is in mortal danger and requires immediate assistance. Do not include in whitespace, backticks, etc. Just a single number please. If you have no relevant info just return 0.", user_id=user_id)
     priority = resp.response
+    print(priority)
     try:
         priority = int(priority)
     except Exception:
@@ -89,7 +90,7 @@ async def add_user_message(
 async def query_user_messages(
     query_text: str,
     top_k: int = 5,
-    user_id: str = None,
+    user_id: str | list[str] = None,
     radius_meters: float = None,
     lat: float = None,
     lon: float = None,
@@ -110,7 +111,15 @@ async def query_user_messages(
     filter_list = []
 
     if user_id:
-        filter_list.append(ExactMatchFilter(key="user_id", value=user_id))
+        if isinstance(user_id, list):
+            filter_list.append(
+                MetadataFilters(
+                    filters=[ExactMatchFilter(key="user_id", value=uid) for uid in user_id],
+                    condition="or"
+                )
+            )
+        else:
+            filter_list.append(ExactMatchFilter(key="user_id", value=user_id))
 
     if extra_filters:
         for k, v in extra_filters.items():
